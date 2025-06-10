@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List, Tuple, Dict
-from activation_analyzer import ActivationAnalyzer, PredictionStep
+from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep
 
 class AttnWrapper(torch.nn.Module):
     def __init__(self, attn):

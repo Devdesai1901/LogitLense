@@ -5,9 +5,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import warnings  # Import warnings module
 from enum import Enum
-from explanation.logit_lens.model_factory import ModelFactory, ModelType
-from activation_analyzer import ActivationAnalyzer
-from prompt_templates import TaskConfig, Concept, CrossDomainAnalogyConfig, PromptTemplate
+from LogitLens4LLMs.model_factory import ModelFactory, ModelType
+from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep   
+# from prompt_templates import TaskConfig, Concept, CrossDomainAnalogyConfig, PromptTemplate
 
 class ModelPath(Enum):
     """Enumeration of local model paths"""
@@ -60,6 +60,7 @@ def run_analysis(
         save_output: Whether to save visualization results
         output_base_path: Base directory for saving outputs
     """
+    local_path = None
     if use_local:
         local_path = ModelPath.get_path(model_type)
         
@@ -113,7 +114,7 @@ def main():
     # Simple test example
     token = input("Please enter your HuggingFace token: ")
     # Test 1: Basic logit lens functionality
-    test_prompt = "Complete this sentence: The cat sat on the"
+    test_prompt = "India is Great!"
     print("\nRunning basic logit lens test...")
     run_analysis(
         model_type=ModelType.LLAMA_3_1_8B,

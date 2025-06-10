@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List, Tuple, Dict
-from activation_analyzer import ActivationAnalyzer, PredictionStep
+from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep
 
 class AttnWrapper(torch.nn.Module):
     def __init__(self, attn):
@@ -81,7 +81,8 @@ class BlockOutputWrapper(torch.nn.Module):
 class Llama3_1_8BHelper:
     def __init__(self, use_local: bool = True, local_path: str = "./explanation/models_hf", token: str = None):
         print("Initializing Llama-3.1-8B Helper...")
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device("cuda:2")
         print(f"Using device: {self.device}")
         
         model_id = "meta-llama/Llama-3.1-8B"
@@ -101,11 +102,11 @@ class Llama3_1_8BHelper:
             if use_local:
                 self.model = AutoModelForCausalLM.from_pretrained(local_path).to(self.device)
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(model_id, use_auth_token=token).to(self.device)
+                self.model = AutoModelForCausalLM.from_pretrained(model_id, token=token).to(self.device)
         except Exception as e:
             print(f"Error loading model: {e}")
-        print("Model loaded successfully")
-        
+            raise RuntimeError("🚫 Failed to load model. Aborting.")
+                
         # Wrap all layers
         for i, layer in enumerate(self.model.model.layers):
             self.model.model.layers[i] = BlockOutputWrapper(
