@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Union, Dict, Type
 from LogitLens4LLMs.model_helper.llama_2_helper import Llama7BHelper
 from LogitLens4LLMs.model_helper.llama_3_1_helper import Llama3_1_8BHelper
+from LogitLens4LLMs.model_helper.llama_3_1_70B_helper import Llama3_1_70BHelper
 from LogitLens4LLMs.model_helper.qwen_helper import QwenHelper
 
 
@@ -9,7 +10,9 @@ class ModelType(Enum):
     """Enumeration of supported model types"""
     LLAMA_7B = "llama_7b"
     LLAMA_3_1_8B = "llama_3_1_8b"
+    LLAMA_3_1_70B = "llama_3_1_70B"
     QWEN_7B = "qwen_7b"
+   
     
     @classmethod
     def from_string(cls, model_name: str) -> 'ModelType':
@@ -25,6 +28,7 @@ class ModelFactory:
     _model_registry: Dict[ModelType, Type] = {
         ModelType.LLAMA_7B: Llama7BHelper,
         ModelType.LLAMA_3_1_8B: Llama3_1_8BHelper,
+        ModelType.LLAMA_3_1_70B: Llama3_1_70BHelper,
         ModelType.QWEN_7B: QwenHelper
     }
     
@@ -46,7 +50,7 @@ class ModelFactory:
         local_path: str = "./explanation/models_hf",
         token: str = None,
         **kwargs
-    ) -> Union[Llama7BHelper, Llama3_1_8BHelper]:
+    ) -> Union[Llama7BHelper, Llama3_1_8BHelper,Llama3_1_70BHelper ]:
         """Create a model instance
         
         Args:

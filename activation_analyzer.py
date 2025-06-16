@@ -147,7 +147,7 @@ class ActivationAnalyzer:
         prediction_step: PredictionStep,
         output_dir: str,
         step_idx: int,
-        model_name: str = "Llama-2-7b",
+        model_name: str = "Llama-3-7b",
         threshold: int = 3,
         max_tokens: int = 10,
         fig_width: int = 15,

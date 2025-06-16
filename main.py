@@ -112,15 +112,16 @@ def run_analysis(
 
 def main():
     # Simple test example
-    token = input("Please enter your HuggingFace token: ")
+    token = "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"
     # Test 1: Basic logit lens functionality
-    test_prompt = "India is Great!"
+    test_prompt = "India is Great"
     print("\nRunning basic logit lens test...")
     run_analysis(
-        model_type=ModelType.LLAMA_3_1_8B,
+        model_type= ModelType.LLAMA_3_1_70B,
         token=token,
         prompt=test_prompt,
-        num_trials=1,
+        max_output_new_tokens=10,
+        num_trials=5,
         print_details=True,
         save_output=True
     )

@@ -6,6 +6,7 @@ import os
 import argparse
 import deepspeed
 
+
 class AttnWrapper(torch.nn.Module):
     def __init__(self, attn):
         super().__init__()
@@ -23,6 +24,7 @@ class AttnWrapper(torch.nn.Module):
     def reset(self):
         self.activations = None
         self.add_tensor = None
+
 
 class BlockOutputWrapper(torch.nn.Module):
     def __init__(self, block, lm_head, norm):
@@ -81,9 +83,10 @@ class BlockOutputWrapper(torch.nn.Module):
     def get_attn_activations(self):
         return self.block.self_attn.activations
 
-class Llama3_1_8BHelper:
+
+class Llama3_1_70BHelper:
     def __init__(self, use_local: bool = True, local_path: str = "./explanation/models_hf", token: str = None):
-        print("Initializing Llama-3.1-8B Helper...")
+        print("Initializing Llama-3.1-70B Helper...")
 
         if "LOCAL_RANK" in os.environ:
             local_rank = int(os.environ["LOCAL_RANK"])
@@ -97,7 +100,7 @@ class Llama3_1_8BHelper:
         self.device = torch.device(f"cuda:{local_rank}")
         print(f"Using device: {self.device}")
 
-        model_id = "meta-llama/Llama-3.1-8B"
+        model_id = "meta-llama/Llama-3.1-70B"
 
         print("Loading tokenizer...")
         if use_local:
@@ -313,4 +316,4 @@ class Llama3_1_8BHelper:
             else:
                 print(f"Step {step_idx + 1}: Generated '{predicted_token}'")
         
-        return prediction_steps 
+        return prediction_steps         
