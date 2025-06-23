@@ -43,7 +43,11 @@ def run_analysis(
     print_details: bool = False,
     max_output_new_tokens: int = 10,
     save_output: bool = True,
-    output_base_path: str = "./explanation/logit_lens"
+    output_base_path: str = "./explanation/logit_lens",
+    collect_attn_mech: bool=True,
+    collect_intermediate_res: bool=True, 
+    collect_mlp: bool=True,
+    collect_block: bool=True
 ):
     """
     Run logit lens analysis on large language models, generate prediction steps and save visualization results.
@@ -68,7 +72,11 @@ def run_analysis(
         model_type=model_type,
         use_local=use_local,
         local_path=local_path,
-        token=token
+        token=token,
+        collect_attn_mech = collect_attn_mech,
+        collect_intermediate_res = collect_intermediate_res, 
+        collect_mlp = collect_mlp,
+        collect_block = collect_block
     )
     analyzer = ActivationAnalyzer()
     
@@ -85,7 +93,12 @@ def run_analysis(
             top_p=0.95,
             topk=extract_middle_token_num,
             threshold=3,
-            print_details=print_details
+            print_details = print_details,
+            collect_attn_mech = collect_attn_mech,
+            collect_intermediate_res = collect_intermediate_res, 
+            collect_mlp = collect_mlp,
+            collect_block = collect_block
+
         )
         
         print(f"Output: {[prediction_steps[-1]['input_text']]+[prediction_steps[-1]['predicted_token']]}\n")
@@ -114,92 +127,44 @@ def main():
     # Simple test example
     token = "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"
     # Test 1: Basic logit lens functionality
-    test_prompt = "India is Great"
+    test_prompt = "America is a great country!"
     print("\nRunning basic logit lens test...")
     run_analysis(
         model_type= ModelType.LLAMA_3_1_70B,
         token=token,
         prompt=test_prompt,
-        max_output_new_tokens=10,
-        num_trials=5,
+        extract_middle_token_num = 3,
+        max_output_new_tokens=5,
+        num_trials=1,
         print_details=True,
-        save_output=True
+        save_output=True,
+        collect_attn_mech=False,
+        collect_intermediate_res=False, 
+        collect_mlp=False,
+        collect_block=True
     )
  
+
+# from LogitLens4LLMs.llm_steer.steer_vec_llama_3_1_8B import Steer
+
+# # Initialize Steer with LLaMA 3.1 8B
+# steer = Steer(device="cuda")
+
+# # Add a steering vector to layer 20
+# steer.add(
+#     layer_idx=20,
+#     coeff=0.5,
+#     text="This is a positive response.",
+#     try_keep_nr=1,
+#     exclude_bos_token=False,
+# )
+
+# # Get all steering vectors
+# print(steer.get_all())
+
+# # Reset steering for layer 20
+# steer.reset(20) 
 
 if __name__ == "__main__":
     main()
 
-# Generating trail 1...
-# Step 1: Generated '
-# '
-# Step 2: Generated '##'
-# Step 3: Generated 'Solution'
-# Step 4: Generated '
-# '
-# Step 5: Generated '
-# '
-# Step 6: Generated 'Answer'
-# Step 7: Generated ':'
-# Step 8: Generated '['
-# Step 9: Generated 'In'
-# Step 10: Generated 'fer'
-# Trail 1 completed.
-
-# Generating trail 2...
-# Step 1: Generated '
-# '
-# Step 2: Generated '1'
-# Step 3: Generated '.'
-# Step 4: Generated 'Dim'
-# Step 5: Generated 'in'
-# Step 6: Generated 'ishing'
-# Step 7: Generated 'marg'
-# Step 8: Generated 'inal'
-# Step 9: Generated 'utility'
-# Step 10: Generated '
-# '
-# Trail 2 completed.
-
-# Generating trail 3...
-# Step 1: Generated '
-# '
-# Step 2: Generated '>'
-# Step 3: Generated 'A'
-# Step 4: Generated '.'
-# Step 5: Generated 'Dim'
-# Step 6: Generated 'in'
-# Step 7: Generated 'ishing'
-# Step 8: Generated 'Marg'
-# Step 9: Generated 'inal'
-# Step 10: Generated 'Util'
-# Trail 3 completed.
-
-# Generating trail 4...
-# Step 1: Generated '*'
-# Step 2: Generated '['
-# Step 3: Generated 'b'
-# Step 4: Generated ']'
-# Step 5: Generated 'Ind'
-# Step 6: Generated 'ividual'
-# Step 7: Generated 'demand'
-# Step 8: Generated 'curve'
-# Step 9: Generated '['
-# Step 10: Generated '/'
-# Trail 4 completed.
-
-# Generating trail 5...
-# Step 1: Generated '
-# '
-# Step 2: Generated '##'
-# Step 3: Generated 'How'
-# Step 4: Generated 'to'
-# Step 5: Generated 'solve'
-# Step 6: Generated '
-# '
-# Step 7: Generated '
-# '
-# Step 8: Generated 'The'
-# Step 9: Generated 'answers'
-# Step 10: Generated 'are'
-# Trail 5 completed.

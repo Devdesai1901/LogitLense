@@ -49,6 +49,7 @@ class ModelFactory:
         use_local: bool = True,
         local_path: str = "./explanation/models_hf",
         token: str = None,
+        collect_attn_mech: bool = True,collect_intermediate_res: bool = True, collect_mlp:  bool = True, collect_block: bool = True,
         **kwargs
     ) -> Union[Llama7BHelper, Llama3_1_8BHelper,Llama3_1_70BHelper ]:
         """Create a model instance
@@ -70,8 +71,23 @@ class ModelFactory:
             raise ValueError(f"Unsupported model type: {model_type}")
             
         model_class = cls._model_registry[model_type]
+
+
+         # Conditional logic for LLAMA_3_1_8B
+        if model_type == ModelType.LLAMA_3_1_8B or ModelType.LLAMA_3_1_70B:
+            return model_class(
+                use_local=use_local,
+                local_path=local_path,
+                token=token,
+                collect_attn_mech=collect_attn_mech,
+                collect_intermediate_res=collect_intermediate_res,
+                collect_mlp=collect_mlp,
+                collect_block=collect_block,
+                **kwargs
+            )
+        
         return model_class(use_local=use_local, local_path=local_path, token=token, **kwargs)
-    
+        
     @classmethod
     def get_supported_models(cls) -> list[str]:
         """Get names of all supported model types"""

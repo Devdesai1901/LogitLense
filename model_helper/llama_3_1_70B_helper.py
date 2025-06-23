@@ -1,18 +1,20 @@
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from typing import List, Tuple, Dict
 from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep
+from deepspeed.runtime.utils import see_memory_usage
 import os
-import argparse
 import deepspeed
+import multiprocessing
+import gc
 
-
+# Wrapper for capturing or modifying attention outputs
 class AttnWrapper(torch.nn.Module):
     def __init__(self, attn):
         super().__init__()
-        self.attn = attn
-        self.activations = None
-        self.add_tensor = None
+        self.attn = attn     # Original attention layer
+        self.activations = None     # Stores output activations
+        self.add_tensor = None      # Optional tensor to add 
 
     def forward(self, *args, **kwargs):
         output = self.attn(*args, **kwargs)
@@ -25,19 +27,19 @@ class AttnWrapper(torch.nn.Module):
         self.activations = None
         self.add_tensor = None
 
-
+# Wrapper around transformer block to collect various intermediate outputs
 class BlockOutputWrapper(torch.nn.Module):
-    def __init__(self, block, lm_head, norm):
+    def __init__(self, block, lm_head, norm, collect_attn_mech: bool = True, collect_intermediate_res: bool = True, collect_mlp: bool = True, collect_block: bool = True):
         super().__init__()
         self.block = block
         self.lm_head = lm_head
         self.norm = norm
-        
-        # Wrap attention module
+        self.collect_attn_mech = collect_attn_mech
+        self.collect_intermediate_res = collect_intermediate_res
+        self.collect_mlp = collect_mlp
+        self.collect_block = collect_block
         self.block.self_attn = AttnWrapper(self.block.self_attn)
         self.post_attention_layernorm = self.block.post_attention_layernorm
-
-        # Store intermediate activations
         self.attn_mech_output_unembedded = None
         self.intermediate_res_unembedded = None
         self.mlp_output_unembedded = None
@@ -45,29 +47,17 @@ class BlockOutputWrapper(torch.nn.Module):
 
     def forward(self, x, past_key_value=None, attention_mask=None, position_ids=None, **kwargs):
         output = self.block(x, past_key_value=past_key_value, attention_mask=attention_mask, 
-                          position_ids=position_ids, **kwargs)
+                            position_ids=position_ids, **kwargs)
 
-        # Get hidden states
-        if isinstance(output, tuple):
-            hidden_states = output[0]
-        else:
-            hidden_states = output
-            
-        # Get attention output and compute intermediate activations
-        attn_output = self.block.self_attn.activations
-        self.attn_mech_output_unembedded = self.lm_head(self.norm(attn_output))
-        
-        # Add residual connection
-        attn_output += x
-        self.intermediate_res_unembedded = self.lm_head(self.norm(attn_output))
-        
-        # MLP output
+        # Collect intermediate residual stream (after attention)                    
+        attn_output = output[0] + x
+        if self.collect_intermediate_res:
+            self.intermediate_res_unembedded = self.lm_head(self.norm(attn_output))
         mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
-        self.mlp_output_unembedded = self.lm_head(self.norm(mlp_output))
-        
-        # Block output
-        self.block_output_unembedded = self.lm_head(self.norm(hidden_states))
-
+        if self.collect_mlp:
+            self.mlp_output_unembedded = self.lm_head(self.norm(mlp_output))
+        if self.collect_block:
+            self.block_output_unembedded = self.lm_head(self.norm(output[0]))
         return output
 
     def attn_add_tensor(self, tensor):
@@ -75,6 +65,7 @@ class BlockOutputWrapper(torch.nn.Module):
 
     def reset(self):
         self.block.self_attn.reset()
+        # Buffers to store unembedded outputs
         self.attn_mech_output_unembedded = None
         self.intermediate_res_unembedded = None
         self.mlp_output_unembedded = None
@@ -83,74 +74,131 @@ class BlockOutputWrapper(torch.nn.Module):
     def get_attn_activations(self):
         return self.block.self_attn.activations
 
+# Ensure multiprocessing safety
+multiprocessing.set_start_method("spawn", force=True)
+# Allow flexible memory growth in CUDA
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+# Helper class to load and manage LLaMA 3.1–70B model with DeepSpeed and logit lens
 class Llama3_1_70BHelper:
-    def __init__(self, use_local: bool = True, local_path: str = "./explanation/models_hf", token: str = None):
+    def __init__(self, use_local=True, local_path="~/LogitLens4LLMs/output/cache/models--meta-llama--Meta-Llama-3.1-70B/snapshots/349b2ddb53ce8f2849a6c168a81980ab25258dac", token=None, collect_attn_mech=True, collect_intermediate_res=True, collect_mlp=True, collect_block=True):
         print("Initializing Llama-3.1-70B Helper...")
-
-        if "LOCAL_RANK" in os.environ:
-            local_rank = int(os.environ["LOCAL_RANK"])
-        else:
-            parser = argparse.ArgumentParser()
-            parser.add_argument("--local_rank", type=int, default=0)
-            args = parser.parse_args()
-            local_rank = args.local_rank
-
+        see_memory_usage("Before initialization", force=True)
+        
+        # Setup for distributed GPU
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        world_size = int(os.environ.get("WORLD_SIZE", 4))
         torch.cuda.set_device(local_rank)
         self.device = torch.device(f"cuda:{local_rank}")
-        print(f"Using device: {self.device}")
+        print(f"Using device: {self.device}, Local rank: {local_rank}, World size: {world_size}")
 
-        model_id = "meta-llama/Llama-3.1-70B"
+        try:
+            # Initialize DeepSpeed distributed training
+            if not torch.distributed.is_initialized():
+                deepspeed.init_distributed(dist_backend="nccl")
+            print("DeepSpeed distributed initialized")
+        except Exception as e:
+            print(f"Error initializing DeepSpeed distributed: {e}")
+            raise
+        
+        
+        model_id = "meta-llama/Meta-Llama-3.1-70B"
+        cache_dir = os.path.expanduser("~/LogitLens4LLMs/output/cache")
+        os.makedirs(cache_dir, exist_ok=True)
 
         print("Loading tokenizer...")
-        if use_local:
-            self.tokenizer = AutoTokenizer.from_pretrained(local_path, use_fast=True)
-        else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_id, token=token, use_fast=True, trust_remote_code=True)
-        print("Tokenizer loaded successfully")
-
-        print("Loading model...")
-        if use_local:
-            model = AutoModelForCausalLM.from_pretrained(local_path, torch_dtype=torch.float16)
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16,
-                token=token
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                local_path if use_local else model_id,
+                use_fast=True,
+                token=token,
+                trust_remote_code=True,
+                cache_dir=cache_dir,
+                truncation=True
+                # max_length=5
             )
+            print("Tokenizer loaded successfully")
+        except Exception as e:
+            print(f"Error loading tokenizer: {e}")
+            raise
 
-            # Wrap with DeepSpeed
-            ds_engine = deepspeed.init_inference(
+        print("Loading model with BF16...")
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                local_path if use_local else model_id,
+                cache_dir=cache_dir,
+                torch_dtype=torch.bfloat16
+            )
+            see_memory_usage("After loading pretrained weights", force=True)
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            raise
+        print("model", model)
+        print("Initializing DeepSpeed inference...")
+        try:
+            self.model = deepspeed.init_inference(
                 model,
-                dtype=torch.float16,
-                tensor_parallel={"tp_size": torch.cuda.device_count()},
-                replace_method="none",
+                tensor_parallel={"tp_size": world_size},
+                dtype=torch.bfloat16,
                 replace_with_kernel_inject=False
             )
-           
-            lm_head = ds_engine.module.lm_head  # Get from DeepSpeed-wrapped module
-            norm = ds_engine.module.model.norm
-            for i, layer in enumerate(ds_engine.module.model.layers):
-                ds_engine.module.model.layers[i] = BlockOutputWrapper(layer, lm_head, norm)
-            self.model = ds_engine
-            print("All layers wrapped successfully")
+            see_memory_usage("After DeepSpeed inference initialization", force=True)
+            print("DeepSpeed inference initialization complete")
+        except Exception as e:
+            print(f"Error initializing DeepSpeed inference: {e}")
+            raise
 
-            
-        print("Model wrapped with DeepSpeed engine")
+        try:
+            full_model = self.model.module if hasattr(self.model, 'module') else self.model
+            base_model = full_model.model
+            lm_head = full_model.lm_head
+            norm = base_model.norm
+            base_model.layers = torch.nn.ModuleList([
+                BlockOutputWrapper(
+                    layer,
+                    lm_head,
+                    norm,
+                    collect_attn_mech=collect_attn_mech,
+                    collect_intermediate_res=collect_intermediate_res,
+                    collect_mlp=collect_mlp,
+                    collect_block=collect_block
+                )
+                for layer in base_model.layers
+            ])
+            print("All layers wrapped successfully")
+        except Exception as e:
+            print(f"Error wrapping layers: {e}")
+            raise
+
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        import atexit
+        def cleanup():
+            try:
+                if torch.distributed.is_initialized():
+                    torch.distributed.destroy_process_group()
+                torch.cuda.empty_cache()
+                gc.collect()
+            except Exception as e:
+                print(f"Error during cleanup: {e}")
+        atexit.register(cleanup)
 
     def generate_text(self, prompt, max_length=100):
         inputs = self.tokenizer(prompt, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         generate_ids = self.model.generate(
-            inputs.input_ids.to(self.device),
+            **inputs,
             max_length=max_length,
             pad_token_id=self.tokenizer.eos_token_id
         )
-        return self.tokenizer.batch_decode(generate_ids, skip_special_tokens=True,   clean_up_tokenization_spaces=False)[0]
+        return self.tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
 
     def get_logits(self, prompt):
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():
-            logits = self.model(inputs.input_ids.to(self.device)).logits
+            logits = self.model(**inputs).logits
         return logits
 
     def set_add_attn_output(self, layer, add_output):
@@ -188,28 +236,21 @@ class Llama3_1_70BHelper:
     ) -> Dict[int, Dict[str, List[Tuple[str, int]]]]:
         self.get_logits(text)
         all_layers_data = {}
-        
         for i, layer in enumerate(self.model.module.model.layers):
             layer_data = {}
-            
             if collect_attn_mech:
                 layer_data['attention_mechanism'] = self.collect_decoded_activations(
                     layer.attn_mech_output_unembedded, topk=topk)
-            
             if collect_intermediate_res:
                 layer_data['intermediate_residual'] = self.collect_decoded_activations(
                     layer.intermediate_res_unembedded, topk=topk)
-            
             if collect_mlp:
                 layer_data['mlp_output'] = self.collect_decoded_activations(
                     layer.mlp_output_unembedded, topk=topk)
-            
             if collect_block:
                 layer_data['block_output'] = self.collect_decoded_activations(
                     layer.block_output_unembedded, topk=topk)
-            
             all_layers_data[i] = layer_data
-            
         return all_layers_data
 
     def decode_all_layers(self, text, topk=10, print_attn_mech=True, 
@@ -235,43 +276,25 @@ class Llama3_1_70BHelper:
         prompt: str,
         max_new_tokens: int = 20,
         temperature: float = 1.0,
-        top_p: float = 0.9,
+        top_p: float = 0.3,    
+        # 0. ascended_14,
         topk: int = 10,
         threshold: int = 3,
-        print_details: bool = True
+        print_details: bool = True,
+        collect_attn_mech: bool = True,
+        collect_intermediate_res: bool = True, 
+        collect_mlp: bool = True,
+        collect_block: bool = True
     ) -> List[PredictionStep]:
-        """
-        Generate text and record the prediction process for each token
-        
-        Args:
-            prompt: Input prompt text
-            max_new_tokens: Maximum number of tokens to generate
-            temperature: Sampling temperature
-            top_p: Nucleus sampling parameter
-            topk: Number of top predictions to save for each layer
-            threshold: Threshold for important layers
-            print_details: Whether to print detailed prediction information
-            
-        Returns:
-            List[PredictionStep]: List of prediction steps
-        """
         prediction_steps = []
         current_text = prompt
         input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.device)
-        
         for step_idx in range(max_new_tokens):
-            # Get layer activation data for current step
-            all_layers_data = self.decode_all_layers_to_dict(current_text, topk=topk)
-            
-            # Generate next token
+            all_layers_data = self.decode_all_layers_to_dict(current_text, topk=topk, collect_attn_mech=collect_attn_mech, collect_intermediate_res=collect_intermediate_res, collect_mlp=collect_mlp, collect_block=collect_block)
             with torch.no_grad():
                 outputs = self.model(input_ids)
                 next_token_logits = outputs.logits[:, -1, :]
-                
-                # Apply temperature
                 next_token_logits = next_token_logits / temperature
-                
-                # Apply top_p sampling
                 probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
                 sorted_probs, sorted_indices = torch.sort(probs, descending=True)
                 cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
@@ -280,16 +303,9 @@ class Llama3_1_70BHelper:
                 sorted_indices_to_remove[..., 0] = 0
                 indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
                 next_token_logits[indices_to_remove] = float('-inf')
-                
                 next_token_id = torch.multinomial(torch.nn.functional.softmax(next_token_logits, dim=-1), num_samples=1)
-            
-            # Decode generated token
             predicted_token = self.tokenizer.decode(next_token_id[0])
-            
-            # Get important layers data
             important_layers = ActivationAnalyzer.filter_important_layers(all_layers_data, threshold=threshold)
-            
-            # Record step data
             step_data = {
                 "step_idx": step_idx,
                 "input_text": current_text,
@@ -298,12 +314,8 @@ class Llama3_1_70BHelper:
                 "important_layers": important_layers
             }
             prediction_steps.append(step_data)
-            
-            # Update input
             input_ids = torch.cat([input_ids, next_token_id], dim=-1)
             current_text += predicted_token
-            
-            # Print current step information
             if print_details:
                 print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
                 print(f"Current text: {current_text}")
@@ -315,5 +327,6 @@ class Llama3_1_70BHelper:
                         print(f"  {component_name}: {top_preds[component_name]}")
             else:
                 print(f"Step {step_idx + 1}: Generated '{predicted_token}'")
-        
-        return prediction_steps         
+        torch.cuda.empty_cache()
+        gc.collect()
+        return prediction_steps

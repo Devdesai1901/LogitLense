@@ -25,12 +25,19 @@ class AttnWrapper(torch.nn.Module):
         self.add_tensor = None
 
 class BlockOutputWrapper(torch.nn.Module):
-    def __init__(self, block, lm_head, norm):
+    def __init__(self, block, lm_head, norm, collect_attn_mech: bool = True,collect_intermediate_res: bool = True, collect_mlp:  bool = True, collect_block: bool = True):
         super().__init__()
         self.block = block
         self.lm_head = lm_head
         self.norm = norm
         
+
+         # Component toggles
+        self.collect_attn_mech = collect_attn_mech
+        self.collect_intermediate_res = collect_intermediate_res
+        self.collect_mlp = collect_mlp
+        self.collect_block = collect_block
+
         # Wrap attention module
         self.block.self_attn = AttnWrapper(self.block.self_attn)
         self.post_attention_layernorm = self.block.post_attention_layernorm
@@ -51,20 +58,21 @@ class BlockOutputWrapper(torch.nn.Module):
         else:
             hidden_states = output
             
+        attn_output = self.block.self_attn.activations    
         # Get attention output and compute intermediate activations
-        attn_output = self.block.self_attn.activations
-        self.attn_mech_output_unembedded = self.lm_head(self.norm(attn_output))
+        if self.collect_attn_mech:
+            self.attn_mech_output_unembedded = self.lm_head(self.norm(attn_output)).cpu()
         
-        # Add residual connection
         attn_output += x
-        self.intermediate_res_unembedded = self.lm_head(self.norm(attn_output))
+        if self.collect_intermediate_res:
+            self.intermediate_res_unembedded = self.lm_head(self.norm(attn_output)).cpu()
         
-        # MLP output
         mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
-        self.mlp_output_unembedded = self.lm_head(self.norm(mlp_output))
+        if self.collect_mlp:
+            self.mlp_output_unembedded = self.lm_head(self.norm(mlp_output)).cpu()
         
-        # Block output
-        self.block_output_unembedded = self.lm_head(self.norm(hidden_states))
+        if self.collect_block:
+            self.block_output_unembedded = self.lm_head(self.norm(hidden_states)).cpu()
 
         return output
 
@@ -82,7 +90,7 @@ class BlockOutputWrapper(torch.nn.Module):
         return self.block.self_attn.activations
 
 class Llama3_1_8BHelper:
-    def __init__(self, use_local: bool = True, local_path: str = "./explanation/models_hf", token: str = None):
+    def __init__(self, use_local: bool = True, local_path: str = "./explanation/models_hf", token: str = None,collect_attn_mech: bool = True,collect_intermediate_res: bool = True, collect_mlp:  bool = True, collect_block: bool = True):
         print("Initializing Llama-3.1-8B Helper...")
 
         if "LOCAL_RANK" in os.environ:
@@ -128,7 +136,7 @@ class Llama3_1_8BHelper:
             lm_head = ds_engine.module.lm_head  # Get from DeepSpeed-wrapped module
             norm = ds_engine.module.model.norm
             for i, layer in enumerate(ds_engine.module.model.layers):
-                ds_engine.module.model.layers[i] = BlockOutputWrapper(layer, lm_head, norm)
+                ds_engine.module.model.layers[i] = BlockOutputWrapper(layer, lm_head, norm, collect_attn_mech = collect_attn_mech, collect_intermediate_res = collect_intermediate_res, collect_mlp = collect_mlp, collect_block = collect_block)
             self.model = ds_engine
             print("All layers wrapped successfully")
 
@@ -235,7 +243,11 @@ class Llama3_1_8BHelper:
         top_p: float = 0.9,
         topk: int = 10,
         threshold: int = 3,
-        print_details: bool = True
+        print_details: bool = True,
+        collect_attn_mech: bool = True,
+        collect_intermediate_res: bool = True, 
+        collect_mlp: bool = True,
+        collect_block: bool = True
     ) -> List[PredictionStep]:
         """
         Generate text and record the prediction process for each token
@@ -258,7 +270,7 @@ class Llama3_1_8BHelper:
         
         for step_idx in range(max_new_tokens):
             # Get layer activation data for current step
-            all_layers_data = self.decode_all_layers_to_dict(current_text, topk=topk)
+            all_layers_data = self.decode_all_layers_to_dict(current_text, topk=topk, collect_attn_mech = collect_attn_mech, collect_intermediate_res = collect_intermediate_res, collect_mlp = collect_mlp, collect_block = collect_block)
             
             # Generate next token
             with torch.no_grad():
