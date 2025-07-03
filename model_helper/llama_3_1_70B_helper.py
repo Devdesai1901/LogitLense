@@ -31,15 +31,19 @@ class AttnWrapper(torch.nn.Module):
 class BlockOutputWrapper(torch.nn.Module):
     def __init__(self, block, lm_head, norm, collect_attn_mech: bool = True, collect_intermediate_res: bool = True, collect_mlp: bool = True, collect_block: bool = True):
         super().__init__()
+
         self.block = block
         self.lm_head = lm_head
         self.norm = norm
+        
         self.collect_attn_mech = collect_attn_mech
         self.collect_intermediate_res = collect_intermediate_res
         self.collect_mlp = collect_mlp
         self.collect_block = collect_block
+
         self.block.self_attn = AttnWrapper(self.block.self_attn)
         self.post_attention_layernorm = self.block.post_attention_layernorm
+
         self.attn_mech_output_unembedded = None
         self.intermediate_res_unembedded = None
         self.mlp_output_unembedded = None
@@ -49,15 +53,29 @@ class BlockOutputWrapper(torch.nn.Module):
         output = self.block(x, past_key_value=past_key_value, attention_mask=attention_mask, 
                             position_ids=position_ids, **kwargs)
 
-        # Collect intermediate residual stream (after attention)                    
-        attn_output = output[0] + x
+        # Collect intermediate residual stream (after attention)
+
+                # Get hidden states
+        if isinstance(output, tuple):
+            hidden_states = output[0]
+        else:
+            hidden_states = output
+
+        attn_output = self.block.self_attn.activations
         if self.collect_intermediate_res:
-            self.intermediate_res_unembedded = self.lm_head(self.norm(attn_output))
+            last_attn = attn_output[:, -1:, :] if attn_output.ndim == 3 else attn_output.unsqueeze(1)
+            self.intermediate_res_unembedded = self.lm_head(self.norm(last_attn))
+
         mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
+
         if self.collect_mlp:
-            self.mlp_output_unembedded = self.lm_head(self.norm(mlp_output))
+            last_mlp = mlp_output[:, -1:, :] if mlp_output.ndim == 3 else mlp_output.unsqueeze(1)
+            self.mlp_output_unembedded = self.lm_head(self.norm(last_mlp))
+
         if self.collect_block:
-            self.block_output_unembedded = self.lm_head(self.norm(output[0]))
+            last_hidden = hidden_states[:, -1:, :] if hidden_states.ndim == 3 else hidden_states.unsqueeze(1)
+            self.block_output_unembedded = self.lm_head(self.norm(last_hidden))
+
         return output
 
     def attn_add_tensor(self, tensor):
@@ -140,7 +158,9 @@ class Llama3_1_70BHelper:
                 model,
                 tensor_parallel={"tp_size": world_size},
                 dtype=torch.bfloat16,
-                replace_with_kernel_inject=False
+                replace_with_kernel_inject=False,
+                enable_cuda_graph=False  # Disable CUDA graph for memory savings
+                  # Enable activation checkpointing for transformer blocks
             )
             see_memory_usage("After DeepSpeed inference initialization", force=True)
             print("DeepSpeed inference initialization complete")
@@ -210,6 +230,12 @@ class Llama3_1_70BHelper:
     def reset_all(self):
         for layer in self.model.module.model.layers:
             layer.reset()
+            layer.attn_mech_output_unembedded = None
+            layer.intermediate_res_unembedded = None
+            layer.mlp_output_unembedded = None
+            layer.block_output_unembedded = None
+        torch.cuda.empty_cache()
+        gc.collect()
 
     def print_decoded_activations(self, decoded_activations, label, topk=10):
         softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)
@@ -219,9 +245,11 @@ class Llama3_1_70BHelper:
         print(label, list(zip(tokens, probs_percent)))
 
     def collect_decoded_activations(self, decoded_activations: torch.Tensor, topk: int = 10) -> List[Tuple[str, int]]:
-        softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)
-        values, indices = torch.topk(softmaxed, topk)
-        probs_percent = [int(v * 100) for v in values.tolist()]
+        # softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)
+        # values, indices = torch.topk(softmaxed, topk)
+        values, indices = torch.topk(decoded_activations[0][-1], topk)
+        probs_percent = [int(v * 100) for v in torch.nn.functional.softmax(values, dim=-1).tolist()]
+        # probs_percent = [int(v * 100) for v in values.tolist()]
         tokens = self.tokenizer.batch_decode(indices.unsqueeze(-1))
         return list(zip(tokens, probs_percent))
 
@@ -272,40 +300,84 @@ class Llama3_1_70BHelper:
                                             'Block output', topk=topk)
 
     def generate_with_probing(
-        self,
-        prompt: str,
-        max_new_tokens: int = 20,
-        temperature: float = 1.0,
-        top_p: float = 0.3,    
-        # 0. ascended_14,
-        topk: int = 10,
-        threshold: int = 3,
-        print_details: bool = True,
-        collect_attn_mech: bool = True,
-        collect_intermediate_res: bool = True, 
-        collect_mlp: bool = True,
-        collect_block: bool = True
-    ) -> List[PredictionStep]:
+    self,
+    prompt: str,
+    max_new_tokens: int = 20,
+    temperature: float = 1.0,
+    top_p: float = 0.3,    
+    topk: int = 10,
+    threshold: int = 3,
+    print_details: bool = True,
+    collect_attn_mech: bool = True,
+    collect_intermediate_res: bool = True, 
+    collect_mlp: bool = True,
+    collect_block: bool = True
+) -> List[PredictionStep]:
         prediction_steps = []
         current_text = prompt
+
         input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.device)
+
+        # FIRST PREFILL pass
+        with torch.no_grad():
+            outputs = self.model(
+                input_ids,
+                use_cache=True
+            )
+            next_token_logits = outputs.logits[:, -1, :]
+            past_key_values = outputs.past_key_values
+
         for step_idx in range(max_new_tokens):
-            all_layers_data = self.decode_all_layers_to_dict(current_text, topk=topk, collect_attn_mech=collect_attn_mech, collect_intermediate_res=collect_intermediate_res, collect_mlp=collect_mlp, collect_block=collect_block)
-            with torch.no_grad():
-                outputs = self.model(input_ids)
-                next_token_logits = outputs.logits[:, -1, :]
-                next_token_logits = next_token_logits / temperature
-                probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
-                sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-                cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
-                sorted_indices_to_remove = cumsum_probs > top_p
-                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = 0
-                indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-                next_token_logits[indices_to_remove] = float('-inf')
-                next_token_id = torch.multinomial(torch.nn.functional.softmax(next_token_logits, dim=-1), num_samples=1)
+
+            # sampling from logits
+            next_token_logits = next_token_logits / temperature
+            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+            cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
+            sorted_indices_to_remove = cumsum_probs > top_p
+            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+            sorted_indices_to_remove[..., 0] = 0
+            indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+            next_token_logits[indices_to_remove] = float('-inf')
+            next_token_id = torch.multinomial(torch.nn.functional.softmax(next_token_logits, dim=-1), num_samples=1)
+
             predicted_token = self.tokenizer.decode(next_token_id[0])
+            current_text += predicted_token
+
+            # forward only the new token
+            with torch.no_grad():
+                outputs = self.model(
+                    next_token_id,
+                    past_key_values=past_key_values,
+                    use_cache=True
+                )
+                next_token_logits = outputs.logits[:, -1, :]
+                past_key_values = outputs.past_key_values
+
+            # ✅ gather intermediate activations from wrapper
+            all_layers_data = {}
+            for i, layer in enumerate(self.model.module.model.layers):
+                layer_data = {}
+                if collect_attn_mech and layer.attn_mech_output_unembedded is not None:
+                    layer_data['attention_mechanism'] = self.collect_decoded_activations(
+                        layer.attn_mech_output_unembedded, topk=topk
+                    )
+                if collect_intermediate_res and layer.intermediate_res_unembedded is not None:
+                    layer_data['intermediate_residual'] = self.collect_decoded_activations(
+                        layer.intermediate_res_unembedded, topk=topk
+                    )
+                if collect_mlp and layer.mlp_output_unembedded is not None:
+                    layer_data['mlp_output'] = self.collect_decoded_activations(
+                        layer.mlp_output_unembedded, topk=topk
+                    )
+                if collect_block and layer.block_output_unembedded is not None:
+                    layer_data['block_output'] = self.collect_decoded_activations(
+                        layer.block_output_unembedded, topk=topk
+                    )
+                all_layers_data[i] = layer_data
+
             important_layers = ActivationAnalyzer.filter_important_layers(all_layers_data, threshold=threshold)
+
             step_data = {
                 "step_idx": step_idx,
                 "input_text": current_text,
@@ -314,8 +386,7 @@ class Llama3_1_70BHelper:
                 "important_layers": important_layers
             }
             prediction_steps.append(step_data)
-            input_ids = torch.cat([input_ids, next_token_id], dim=-1)
-            current_text += predicted_token
+
             if print_details:
                 print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
                 print(f"Current text: {current_text}")
@@ -325,8 +396,9 @@ class Llama3_1_70BHelper:
                     for component_name, tokens_probs in components.items():
                         top_preds = ActivationAnalyzer.get_top_predictions(components, top_k=5)
                         print(f"  {component_name}: {top_preds[component_name]}")
-            else:
-                print(f"Step {step_idx + 1}: Generated '{predicted_token}'")
-        torch.cuda.empty_cache()
-        gc.collect()
+
+            torch.cuda.empty_cache()
+            gc.collect()
+
+        self.reset_all()
         return prediction_steps

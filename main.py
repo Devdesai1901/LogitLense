@@ -106,15 +106,15 @@ def run_analysis(
         if save_output:
             trial_path = f"{output_base_path}/{model_type.value}/trial_{i}"
             
-            # Save visualizations
-            for step in prediction_steps:
-                analyzer.visualize_layer_predictions(
-                    max_tokens=extract_middle_token_num,
-                    prediction_step=step,
-                    output_dir=f"{trial_path}/visualizations",
-                    step_idx=step['step_idx'],
-                    log_scale=False
-                )
+            #Save visualizations
+            # for step in prediction_steps:
+            #     analyzer.visualize_layer_predictions(
+            #         max_tokens=extract_middle_token_num,
+            #         prediction_step=step,
+            #         output_dir=f"{trial_path}/visualizations",
+            #         step_idx=step['step_idx'],
+            #         log_scale=False
+            #     )
 
             # Save prediction step data
             analyzer.save_prediction_steps(
@@ -127,14 +127,14 @@ def main():
     # Simple test example
     token = "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"
     # Test 1: Basic logit lens functionality
-    test_prompt = "America is a great country!"
+    test_prompt = "Convert the point $(0,3)$ in rectangular coordinates to polar coordinates. Enter your answer in the form $(r,\theta),$ where $r > 0$ and $0 \le \theta < 2 \pi.$"
     print("\nRunning basic logit lens test...")
     run_analysis(
         model_type= ModelType.LLAMA_3_1_70B,
         token=token,
         prompt=test_prompt,
         extract_middle_token_num = 3,
-        max_output_new_tokens=5,
+        max_output_new_tokens=1120,
         num_trials=1,
         print_details=True,
         save_output=True,
