@@ -27,6 +27,22 @@ class AttnWrapper(torch.nn.Module):
         self.activations = None
         self.add_tensor = None
 
+# Wrapper for capturing or modifying MLP outputs
+class MLPWrapper(torch.nn.Module):
+    def __init__(self, mlp):
+        super().__init__()
+        self.mlp = mlp
+        self.activations = None
+
+    def forward(self, *args, **kwargs):
+        output = self.mlp(*args, **kwargs)
+        self.activations = output
+        return output
+
+    def reset(self):
+        self.activations = None
+
+
 # Wrapper around transformer block to collect various intermediate outputs
 class BlockOutputWrapper(torch.nn.Module):
     def __init__(self, block, lm_head, norm, collect_attn_mech: bool = True, collect_intermediate_res: bool = True, collect_mlp: bool = True, collect_block: bool = True):
@@ -42,6 +58,7 @@ class BlockOutputWrapper(torch.nn.Module):
         self.collect_block = collect_block
 
         self.block.self_attn = AttnWrapper(self.block.self_attn)
+        self.block.mlp = MLPWrapper(self.block.mlp)
         self.post_attention_layernorm = self.block.post_attention_layernorm
 
         self.attn_mech_output_unembedded = None
@@ -66,11 +83,12 @@ class BlockOutputWrapper(torch.nn.Module):
             last_attn = attn_output[:, -1:, :] if attn_output.ndim == 3 else attn_output.unsqueeze(1)
             self.intermediate_res_unembedded = self.lm_head(self.norm(last_attn))
 
-        mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
-
-        if self.collect_mlp:
+        # mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
+        mlp_output = self.block.mlp.activations
+        if self.collect_mlp and mlp_output is not None:
             last_mlp = mlp_output[:, -1:, :] if mlp_output.ndim == 3 else mlp_output.unsqueeze(1)
             self.mlp_output_unembedded = self.lm_head(self.norm(last_mlp))
+
 
         if self.collect_block:
             last_hidden = hidden_states[:, -1:, :] if hidden_states.ndim == 3 else hidden_states.unsqueeze(1)
@@ -83,6 +101,7 @@ class BlockOutputWrapper(torch.nn.Module):
 
     def reset(self):
         self.block.self_attn.reset()
+        self.block.mlp.reset()
         # Buffers to store unembedded outputs
         self.attn_mech_output_unembedded = None
         self.intermediate_res_unembedded = None
@@ -234,8 +253,8 @@ class Llama3_1_70BHelper:
             layer.intermediate_res_unembedded = None
             layer.mlp_output_unembedded = None
             layer.block_output_unembedded = None
-        torch.cuda.empty_cache()
-        gc.collect()
+        # torch.cuda.empty_cache()
+        # gc.collect()
 
     def print_decoded_activations(self, decoded_activations, label, topk=10):
         softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)
@@ -397,8 +416,8 @@ class Llama3_1_70BHelper:
                         top_preds = ActivationAnalyzer.get_top_predictions(components, top_k=5)
                         print(f"  {component_name}: {top_preds[component_name]}")
 
-            torch.cuda.empty_cache()
-            gc.collect()
+            # torch.cuda.empty_cache()
+            # gc.collect()
 
         self.reset_all()
         return prediction_steps
