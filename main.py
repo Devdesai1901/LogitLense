@@ -91,7 +91,7 @@ def run_analysis(
         prediction_steps = model.generate_with_probing(
             prompt=prompt,
             max_new_tokens=max_output_new_tokens,
-            temperature=0.7,
+            temperature=0.3,
             top_p=0.95,
             topk=extract_middle_token_num,
             threshold=3,
@@ -104,7 +104,8 @@ def run_analysis(
         )
         
         print(f"Output: {[prediction_steps[-1]['input_text']]+[prediction_steps[-1]['predicted_token']]}\n")
-
+        print("Inference Complete")
+        print("Generating JSON file and Heatmaps")
         if save_output:
             trial_path = f"{output_base_path}/{model_type.value}/trial_{i}"
             
@@ -129,16 +130,16 @@ def main():
     # Simple test example
     token = "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"
     # Test 1: Basic logit lens functionality
-    test_prompt = "America is Great we celebrate its independence on 4 July!"
+    test_prompt = "Generate a long History of how independence story of india."
     print("\nRunning basic logit lens test...")
     run_analysis(
         model_type= ModelType.LLAMA_3_1_70B,
         token=token,
         prompt=test_prompt,
         extract_middle_token_num = 3,
-        max_output_new_tokens=50,
-        num_trials=5,
-        print_details=True,
+        max_output_new_tokens=1500,
+        num_trials=1,
+        print_details=False,
         save_output=True,
         collect_attn_mech=False,
         collect_intermediate_res=False, 

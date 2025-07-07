@@ -56,7 +56,8 @@ class ActivationAnalyzer:
             for component_name in components_to_save:
                 if component_name in layer_data:
                     tokens_probs = layer_data[component_name]
-                    max_prob = max(prob for _, prob in tokens_probs)
+                    flattened = [pair for token_list in tokens_probs for pair in token_list]
+                    max_prob = max(prob for _, prob in flattened)
                     if max_prob > threshold:
                         is_important_layer = True
                         break

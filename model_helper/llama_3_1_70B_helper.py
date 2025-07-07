@@ -61,10 +61,10 @@ class BlockOutputWrapper(torch.nn.Module):
         self.block.mlp = MLPWrapper(self.block.mlp)
         self.post_attention_layernorm = self.block.post_attention_layernorm
 
-        self.attn_mech_output_unembedded = None
-        self.intermediate_res_unembedded = None
-        self.mlp_output_unembedded = None
-        self.block_output_unembedded = None
+        self.attn_mech_output_unembedded = []
+        self.intermediate_res_unembedded = []
+        self.mlp_output_unembedded = []
+        self.block_output_unembedded = []
 
     def forward(self, x, past_key_value=None, attention_mask=None, position_ids=None, **kwargs):
         output = self.block(x, past_key_value=past_key_value, attention_mask=attention_mask, 
@@ -78,21 +78,27 @@ class BlockOutputWrapper(torch.nn.Module):
         else:
             hidden_states = output
 
-        attn_output = self.block.self_attn.activations
+        
         if self.collect_intermediate_res:
-            last_attn = attn_output[:, -1:, :] if attn_output.ndim == 3 else attn_output.unsqueeze(1)
-            self.intermediate_res_unembedded = self.lm_head(self.norm(last_attn))
+            attn_output = self.block.self_attn.activations
+            # last_attn = attn_output[:, -1:, :] if attn_output.ndim == 3 else attn_output.unsqueeze(1)
+            self.intermediate_res_unembedded = attn_output
 
         # mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
-        mlp_output = self.block.mlp.activations
-        if self.collect_mlp and mlp_output is not None:
-            last_mlp = mlp_output[:, -1:, :] if mlp_output.ndim == 3 else mlp_output.unsqueeze(1)
-            self.mlp_output_unembedded = self.lm_head(self.norm(last_mlp))
+       
+        if self.collect_mlp is not None:
+            mlp_output = self.block.mlp.activations
+            # last_mlp = mlp_output[:, -1:, :] if mlp_output.ndim == 3 else mlp_output.unsqueeze(1)
+            # self.mlp_output_unembedded = self.lm_head(self.norm(last_mlp))
 
 
         if self.collect_block:
-            last_hidden = hidden_states[:, -1:, :] if hidden_states.ndim == 3 else hidden_states.unsqueeze(1)
-            self.block_output_unembedded = self.lm_head(self.norm(last_hidden))
+            # last_hidden = hidden_states[:, -1:, :] if hidden_states.ndim == 3 else hidden_states.unsqueeze(1)
+            # self.block_output_unembedded = self.lm_head(self.norm(last_hidden))
+            logits = hidden_states
+            # logits = self.lm_head(self.norm(hidden_states))
+            self.block_output_unembedded.append(logits[:, -1:, :].detach().cpu())
+            # self.block_output_unembedded = hidden_states
 
         return output
 
@@ -103,10 +109,11 @@ class BlockOutputWrapper(torch.nn.Module):
         self.block.self_attn.reset()
         self.block.mlp.reset()
         # Buffers to store unembedded outputs
-        self.attn_mech_output_unembedded = None
-        self.intermediate_res_unembedded = None
-        self.mlp_output_unembedded = None
-        self.block_output_unembedded = None
+        self.attn_mech_output_unembedded = []
+        self.intermediate_res_unembedded = []
+        self.mlp_output_unembedded = []
+        self.block_output_unembedded = []
+
 
     def get_attn_activations(self):
         return self.block.self_attn.activations
@@ -192,6 +199,10 @@ class Llama3_1_70BHelper:
             base_model = full_model.model
             lm_head = full_model.lm_head
             norm = base_model.norm
+
+            self.lm_head = lm_head
+            self.norm = norm
+
             base_model.layers = torch.nn.ModuleList([
                 BlockOutputWrapper(
                     layer,
@@ -263,60 +274,26 @@ class Llama3_1_70BHelper:
         tokens = self.tokenizer.batch_decode(indices.unsqueeze(-1))
         print(label, list(zip(tokens, probs_percent)))
 
-    def collect_decoded_activations(self, decoded_activations: torch.Tensor, topk: int = 10) -> List[Tuple[str, int]]:
-        # softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)
-        # values, indices = torch.topk(softmaxed, topk)
-        values, indices = torch.topk(decoded_activations[0][-1], topk)
-        probs_percent = [int(v * 100) for v in torch.nn.functional.softmax(values, dim=-1).tolist()]
-        # probs_percent = [int(v * 100) for v in values.tolist()]
-        tokens = self.tokenizer.batch_decode(indices.unsqueeze(-1))
-        return list(zip(tokens, probs_percent))
+    def collect_decoded_activations(
+    self,
+    decoded_activations: torch.Tensor,
+    topk: int = 10
+    ) -> List[List[Tuple[str, int]]]:
+        """
+        Return top-k decoded tokens for **each token** in the sequence.
+        """
+        token_outputs = []
+        seq_len = decoded_activations.shape[1]
+        for token_idx in range(seq_len):
+            # hidden_state = decoded_activations[0][token_idx]
+            # logits = self.lm_head(self.norm(hidden_state.to(self.device)))
+            values, indices = torch.topk(decoded_activations[0][-1], topk)
+            probs_percent = [int(v * 100) for v in torch.nn.functional.softmax(values, dim=-1).tolist()]
+            tokens = self.tokenizer.batch_decode(indices.unsqueeze(-1))
+            token_outputs.append(list(zip(tokens, probs_percent)))
+        return token_outputs
 
-    def decode_all_layers_to_dict(
-        self, 
-        text: str, 
-        topk: int = 10, 
-        collect_attn_mech: bool = True,
-        collect_intermediate_res: bool = True, 
-        collect_mlp: bool = True,
-        collect_block: bool = True
-    ) -> Dict[int, Dict[str, List[Tuple[str, int]]]]:
-        self.get_logits(text)
-        all_layers_data = {}
-        for i, layer in enumerate(self.model.module.model.layers):
-            layer_data = {}
-            if collect_attn_mech:
-                layer_data['attention_mechanism'] = self.collect_decoded_activations(
-                    layer.attn_mech_output_unembedded, topk=topk)
-            if collect_intermediate_res:
-                layer_data['intermediate_residual'] = self.collect_decoded_activations(
-                    layer.intermediate_res_unembedded, topk=topk)
-            if collect_mlp:
-                layer_data['mlp_output'] = self.collect_decoded_activations(
-                    layer.mlp_output_unembedded, topk=topk)
-            if collect_block:
-                layer_data['block_output'] = self.collect_decoded_activations(
-                    layer.block_output_unembedded, topk=topk)
-            all_layers_data[i] = layer_data
-        return all_layers_data
-
-    def decode_all_layers(self, text, topk=10, print_attn_mech=True, 
-                         print_intermediate_res=True, print_mlp=True, print_block=True):
-        self.get_logits(text)
-        for i, layer in enumerate(self.model.module.model.layers):
-            print(f'Layer {i}: Decoded intermediate outputs')
-            if print_attn_mech:
-                self.print_decoded_activations(layer.attn_mech_output_unembedded, 
-                                            'Attention mechanism', topk=topk)
-            if print_intermediate_res:
-                self.print_decoded_activations(layer.intermediate_res_unembedded, 
-                                            'Intermediate residual stream', topk=topk)
-            if print_mlp:
-                self.print_decoded_activations(layer.mlp_output_unembedded, 
-                                            'MLP output', topk=topk)
-            if print_block:
-                self.print_decoded_activations(layer.block_output_unembedded, 
-                                            'Block output', topk=topk)
+    
 
     def generate_with_probing(
     self,
@@ -335,89 +312,100 @@ class Llama3_1_70BHelper:
         prediction_steps = []
         current_text = prompt
 
-        input_ids = self.tokenizer(prompt, return_tensors="pt").input_ids.to(self.device)
+        tokenized = self.tokenizer(prompt, return_tensors="pt", truncation=True)
+        input_ids = tokenized.input_ids.to(self.device)
+        attention_mask = tokenized.attention_mask.to(self.device)
 
-        # FIRST PREFILL pass
+
+
         with torch.no_grad():
-            outputs = self.model(
-                input_ids,
+            generated_ids = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                do_sample=True,
+                max_new_tokens = max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                repetition_penalty=1.1,
+                eos_token_id=None,
                 use_cache=True
             )
-            next_token_logits = outputs.logits[:, -1, :]
-            past_key_values = outputs.past_key_values
 
-        for step_idx in range(max_new_tokens):
+        # decode final output
+        decoded_text = self.tokenizer.decode(
+            generated_ids[0],
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False
+        )
 
-            # sampling from logits
-            next_token_logits = next_token_logits / temperature
-            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
-            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-            cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
-            sorted_indices_to_remove = cumsum_probs > top_p
-            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-            sorted_indices_to_remove[..., 0] = 0
-            indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-            next_token_logits[indices_to_remove] = float('-inf')
-            next_token_id = torch.multinomial(torch.nn.functional.softmax(next_token_logits, dim=-1), num_samples=1)
 
-            predicted_token = self.tokenizer.decode(next_token_id[0])
-            current_text += predicted_token
-
-            # forward only the new token
-            with torch.no_grad():
-                outputs = self.model(
-                    next_token_id,
-                    past_key_values=past_key_values,
-                    use_cache=True
+        all_layers_data = {}
+        for i, layer in enumerate(self.model.module.model.layers):
+            layer_data = {}
+            if collect_attn_mech and layer.attn_mech_output_unembedded is not None:
+                layer_data['attention_mechanism'] = self.collect_decoded_activations(
+                    layer.attn_mech_output_unembedded, topk=topk
                 )
-                next_token_logits = outputs.logits[:, -1, :]
-                past_key_values = outputs.past_key_values
+            if collect_intermediate_res and layer.intermediate_res_unembedded is not None:
+                layer_data['intermediate_residual'] = self.collect_decoded_activations(
+                    layer.intermediate_res_unembedded, topk=topk
+                )
+            if collect_mlp and layer.mlp_output_unembedded is not None:
+                layer_data['mlp_output'] = self.collect_decoded_activations(
+                     layer.mlp_output_unembedded, topk=topk
+                )
+            if collect_block and layer.block_output_unembedded is not None:
+                activations = torch.cat(layer.block_output_unembedded, dim=1)
+                layer_data['block_output'] = self.collect_decoded_activations(
+                    activations, topk=topk
+                )
+            all_layers_data[i] = layer_data
+        # important_layers = ActivationAnalyzer.filter_important_layers(all_layers_data, threshold=threshold)
+        important_layers = {}
+        # package as a single PredictionStep since generate runs all at once
+        
 
-            # ✅ gather intermediate activations from wrapper
-            all_layers_data = {}
-            for i, layer in enumerate(self.model.module.model.layers):
-                layer_data = {}
-                if collect_attn_mech and layer.attn_mech_output_unembedded is not None:
-                    layer_data['attention_mechanism'] = self.collect_decoded_activations(
-                        layer.attn_mech_output_unembedded, topk=topk
-                    )
-                if collect_intermediate_res and layer.intermediate_res_unembedded is not None:
-                    layer_data['intermediate_residual'] = self.collect_decoded_activations(
-                        layer.intermediate_res_unembedded, topk=topk
-                    )
-                if collect_mlp and layer.mlp_output_unembedded is not None:
-                    layer_data['mlp_output'] = self.collect_decoded_activations(
-                        layer.mlp_output_unembedded, topk=topk
-                    )
-                if collect_block and layer.block_output_unembedded is not None:
-                    layer_data['block_output'] = self.collect_decoded_activations(
-                        layer.block_output_unembedded, topk=topk
-                    )
-                all_layers_data[i] = layer_data
+        # preallocate fixed-size lists: num_tokens x num_layers
+        # all_tokens_data = [
+        #     [ {} for _ in range(80) ]
+        #     for _ in range(max_new_tokens)
+        # ]
 
-            important_layers = ActivationAnalyzer.filter_important_layers(all_layers_data, threshold=threshold)
 
-            step_data = {
-                "step_idx": step_idx,
-                "input_text": current_text,
-                "predicted_token": predicted_token,
-                "all_layers_data": all_layers_data,
-                "important_layers": important_layers
-            }
-            prediction_steps.append(step_data)
+        # # single pass: fill in the structure
+        # for layer_idx, components in all_layers_data.items():
+        #     for comp_name, token_preds in components.items():
+        #         for token_idx, pred in enumerate(token_preds):
+        #             all_tokens_data[token_idx][layer_idx][comp_name] = pred
 
-            if print_details:
-                print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
-                print(f"Current text: {current_text}")
-                print("\nImportant layers for this prediction:")
-                for layer_idx, components in important_layers.items():
-                    print(f"\nLayer {layer_idx}:")
-                    for component_name, tokens_probs in components.items():
-                        top_preds = ActivationAnalyzer.get_top_predictions(components, top_k=5)
-                        print(f"  {component_name}: {top_preds[component_name]}")
+        # # convert to JSON style with string keys
+        # all_tokens_data_json = {
+        #     str(token_idx): {
+        #         str(layer_idx): layer_components
+        #         for layer_idx, layer_components in enumerate(token_layers)
+        #     }
+        #     for token_idx, token_layers in enumerate(all_tokens_data)
+        # }
 
-            # torch.cuda.empty_cache()
-            # gc.collect()
 
+        prediction_step: PredictionStep = {
+            "step_idx": 0,
+            "input_text": prompt,
+            "predicted_token": decoded_text[len(prompt):],  # only new tokens
+            "all_layers_data": all_layers_data,
+            "important_layers": important_layers
+        }
+
+
+        if print_details:
+            print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
+            print(f"Current text: {current_text}")
+            print("\nImportant layers for this prediction:")
+            for layer_idx, components in important_layers.items():
+                print(f"\nLayer {layer_idx}:")
+                for component_name, tokens_probs in components.items():
+                    top_preds = ActivationAnalyzer.get_top_predictions(components, top_k=5)
+                    print(f"  {component_name}: {top_preds[component_name]}")            
+        print("Inference Complete")
         self.reset_all()
-        return prediction_steps
+        return [prediction_step]
