@@ -97,7 +97,8 @@ class BlockOutputWrapper(torch.nn.Module):
             # self.block_output_unembedded = self.lm_head(self.norm(last_hidden))
             logits = hidden_states
             # logits = self.lm_head(self.norm(hidden_states))
-            self.block_output_unembedded.append(logits[:, -1:, :].detach().cpu())
+            # self.block_output_unembedded.append(logits[:, -1:, :].detach().cpu())
+            self.block_output_unembedded.append(logits[:, -1:, :])
             # self.block_output_unembedded = hidden_states
 
         return output
@@ -177,7 +178,6 @@ class Llama3_1_70BHelper:
         except Exception as e:
             print(f"Error loading model: {e}")
             raise
-        print("model", model)
         print("Initializing DeepSpeed inference...")
         try:
             self.model = deepspeed.init_inference(
@@ -276,20 +276,29 @@ class Llama3_1_70BHelper:
 
     def collect_decoded_activations(
     self,
-    decoded_activations: torch.Tensor,
+    hidden_activations: torch.Tensor,
     topk: int = 10
     ) -> List[List[Tuple[str, int]]]:
         """
         Return top-k decoded tokens for **each token** in the sequence.
         """
         token_outputs = []
-        seq_len = decoded_activations.shape[1]
-        for token_idx in range(seq_len):
-            # hidden_state = decoded_activations[0][token_idx]
-            # logits = self.lm_head(self.norm(hidden_state.to(self.device)))
-            values, indices = torch.topk(decoded_activations[0][-1], topk)
-            probs_percent = [int(v * 100) for v in torch.nn.functional.softmax(values, dim=-1).tolist()]
-            tokens = self.tokenizer.batch_decode(indices.unsqueeze(-1))
+        seq_len = hidden_activations.shape[1]
+        for t in range(seq_len):
+            # 1. Extract the hidden state for token position t
+            hid_t = hidden_activations[:, t, :]  # shape [1, hidden_dim]
+            # 2. Apply final layer normalization
+            normed = self.norm(hid_t) 
+            normed = normed.unsqueeze(1).contiguous()
+            logits = self.lm_head(normed)  
+            logits = logits.squeeze(1)
+            # 4. Get top-K predictions
+            values, indices = torch.topk(logits[0], topk, dim=-1)
+            # 5. Calculate relative probabilities for top-K (optional)
+            probs = torch.nn.functional.softmax(values, dim=-1)  # softmax over just top-K values
+            probs_percent = [int(p.item() * 100) for p in probs]
+            # 6. Decode token IDs to strings
+            tokens = self.tokenizer.batch_decode(indices.unsqueeze(1))
             token_outputs.append(list(zip(tokens, probs_percent)))
         return token_outputs
 
@@ -362,32 +371,7 @@ class Llama3_1_70BHelper:
             all_layers_data[i] = layer_data
         # important_layers = ActivationAnalyzer.filter_important_layers(all_layers_data, threshold=threshold)
         important_layers = {}
-        # package as a single PredictionStep since generate runs all at once
-        
-
-        # preallocate fixed-size lists: num_tokens x num_layers
-        # all_tokens_data = [
-        #     [ {} for _ in range(80) ]
-        #     for _ in range(max_new_tokens)
-        # ]
-
-
-        # # single pass: fill in the structure
-        # for layer_idx, components in all_layers_data.items():
-        #     for comp_name, token_preds in components.items():
-        #         for token_idx, pred in enumerate(token_preds):
-        #             all_tokens_data[token_idx][layer_idx][comp_name] = pred
-
-        # # convert to JSON style with string keys
-        # all_tokens_data_json = {
-        #     str(token_idx): {
-        #         str(layer_idx): layer_components
-        #         for layer_idx, layer_components in enumerate(token_layers)
-        #     }
-        #     for token_idx, token_layers in enumerate(all_tokens_data)
-        # }
-
-
+    
         prediction_step: PredictionStep = {
             "step_idx": 0,
             "input_text": prompt,

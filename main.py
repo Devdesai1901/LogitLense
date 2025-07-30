@@ -106,22 +106,27 @@ def run_analysis(
         print(f"Output: {[prediction_steps[-1]['input_text']]+[prediction_steps[-1]['predicted_token']]}\n")
         print("Inference Complete")
         print("Generating JSON file and Heatmaps")
+
+
+        token_major_steps = ActivationAnalyzer.convert_to_token_major(prediction_steps)
         if save_output:
             trial_path = f"{output_base_path}/{model_type.value}/trial_{i}"
             
             #Save visualizations
-            # for step in prediction_steps:
-            #     analyzer.visualize_layer_predictions(
-            #         max_tokens=extract_middle_token_num,
-            #         prediction_step=step,
-            #         output_dir=f"{trial_path}/visualizations",
-            #         step_idx=step['step_idx'],
-            #         log_scale=False
-            #     )
+            for step in token_major_steps:
+                analyzer.visualize_per_token_heatmaps(
+                    prediction_step=step,
+                    output_dir=f"{trial_path}/visualizations/per_token",
+                    step_idx=step["step_idx"],
+                    component="block_output",
+                    max_tokens=max_output_new_tokens,
+                    log_scale=False,
+                )
+
 
             # Save prediction step data
             analyzer.save_prediction_steps(
-                prediction_steps=prediction_steps,
+                prediction_steps=token_major_steps,
                 output_dir=trial_path,
                 save_all_data=True
             )
@@ -137,7 +142,7 @@ def main():
         token=token,
         prompt=test_prompt,
         extract_middle_token_num = 3,
-        max_output_new_tokens=1500,
+        max_output_new_tokens=10,
         num_trials=1,
         print_details=False,
         save_output=True,
