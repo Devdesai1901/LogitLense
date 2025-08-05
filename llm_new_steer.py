@@ -178,7 +178,7 @@ baseline_outputs = do_steering(
     test_mask.to(device),
     steering_vec=None,
     batch_size=BATCH_SIZE,
-    proj=False
+    proj=True
 )
 # if dist.get_rank() == 0:
 #     print("\n--- BASELINE OUTPUTS ---")
@@ -195,7 +195,7 @@ for layer in range(1, len(model.module.model.layers), 8):  # every 8 layers
         steering_vec=steering_vecs[layer].to(device),
         layer=layer,
         batch_size=BATCH_SIZE,
-        proj=False
+        proj=True
     )
     if dist.get_rank() == 0:
             print(f"\n--- LAYER {layer} INTERVENTION ---")
