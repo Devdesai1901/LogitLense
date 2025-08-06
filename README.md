@@ -134,11 +134,35 @@ will be created containing:
 ## 🎯 Steering Vector Parameters
 
 ### Prompt Arrays (inside `llm_new_steer.py`)
+
 ```python
 enthusiastic_prompts = [ ... ]       # Target style prompts
 unenthusiastic_prompts = [ ... ]     # Base style prompts
 test_prompts = [ ... ]               # Prompts to test steering effect
 ```
+
+## Parameters for `do_steering()`
+
+| Parameter    | Default | Description |
+|--------------|---------|-------------|
+| **scale**    | `1.0`   | Multiplies the steering vector before applying it to hidden states. |
+| **normalise**| `True`  | Normalizes the steering vector to unit length before scaling. |
+| **layer**    | `None`  | Layer index to apply steering; `None` applies to all layers. |
+| **proj**     | `True`  | Projects the steering vector onto the hidden state direction before applying. |
+| **batch_size** | `1`   | Number of sequences processed per batch during inference. |
+
+---
+
+## Parameters for `find_steering_vecs()`
+
+| Parameter      | Default | Description |
+|----------------|---------|-------------|
+| **base_toks**  | *Required* | Tokenized baseline prompts. |
+| **target_toks**| *Required* | Tokenized target prompts. |
+| **base_mask**  | *Required* | Attention mask for `base_toks`. |
+| **target_mask**| *Required* | Attention mask for `target_toks`. |
+| **batch_size** | `2`       | Prompt pairs processed per forward pass. |
+
 
 ### Main Functions
 ```python
