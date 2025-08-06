@@ -200,7 +200,7 @@ OutPut :  " (1 Viewer)\nThread starter TheBee\nTheBee\nI'm a new Marvel fan and 
 > The heatmap visualization below shows the top-k token probabilities across all layers for a single generated token.  
 > This helps in understanding how the model’s predictions evolve layer-by-layer.
 
-
+![Logit Lens Heatmap Example](assets/token_18_block_output_step_0.png)
 
 ## Acknowledgments
 
