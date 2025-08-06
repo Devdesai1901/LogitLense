@@ -1,8 +1,9 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from typing import List, Tuple, Dict
-from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep
+from activation_analyzer import ActivationAnalyzer, PredictionStep
 from deepspeed.runtime.utils import see_memory_usage
+from pathlib import Path
 import os
 import deepspeed
 import multiprocessing
@@ -126,7 +127,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Helper class to load and manage LLaMA 3.1–70B model with DeepSpeed and logit lens
 class Llama3_1_70BHelper:
-    def __init__(self, use_local=False, local_path="~/LogitLens4LLMs/output/cache/models--meta-llama--Meta-Llama-3.1-70B/snapshots/349b2ddb53ce8f2849a6c168a81980ab25258dac", token=None, collect_attn_mech=True, collect_intermediate_res=True, collect_mlp=True, collect_block=True):
+    def __init__(self, use_local=True, local_path="", token=None, collect_attn_mech=True, collect_intermediate_res=True, collect_mlp=True, collect_block=True):
         print("Initializing Llama-3.1-70B Helper...")
         see_memory_usage("Before initialization", force=True)
         
@@ -148,36 +149,17 @@ class Llama3_1_70BHelper:
         
         
         model_id = "meta-llama/Meta-Llama-3.1-70B"
-        cache_dir = os.path.expanduser("~/LogitLens4LLMs/output/cache")
-        os.makedirs(cache_dir, exist_ok=True)
+        # Base dir = project root (two levels up from this file)
+        base_dir = Path(__file__).resolve().parent.parent
+        localPath = base_dir / "output" / "cache" / "models--meta-llama--Meta-Llama-3.1-70B" / "snapshots" / "349b2ddb53ce8f2849a6c168a81980ab25258dac"
+        tokenizer, model = self.load_model_and_tokenizer(
+            local_path= localPath,  
+            cache_dir="output/cache",
+            torch_dtype="bfloat16",
+            token =  token
+        )
+        self.tokenizer = tokenizer
 
-        print("Loading tokenizer...")
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                local_path if use_local else model_id,
-                use_fast=True,
-                token=token,
-                trust_remote_code=True,
-                cache_dir=cache_dir,
-                truncation=True
-                # max_length=5
-            )
-            print("Tokenizer loaded successfully")
-        except Exception as e:
-            print(f"Error loading tokenizer: {e}")
-            raise
-
-        print("Loading model with BF16...")
-        try:
-            model = AutoModelForCausalLM.from_pretrained(
-                local_path if use_local else model_id,
-                cache_dir=cache_dir,
-                torch_dtype=torch.bfloat16
-            )
-            see_memory_usage("After loading pretrained weights", force=True)
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
         print("Initializing DeepSpeed inference...")
         try:
             self.model = deepspeed.init_inference(
@@ -233,6 +215,64 @@ class Llama3_1_70BHelper:
             except Exception as e:
                 print(f"Error during cleanup: {e}")
         atexit.register(cleanup)
+
+    def load_model_and_tokenizer(
+    self,    
+    model_name="meta-llama/Meta-Llama-3.1-70B",
+    local_path=None,
+    cache_dir="output/cache",
+    torch_dtype="bfloat16",
+    token = None,
+    trust_remote_code=True
+    ):
+        """
+        Loads a tokenizer and model from either:
+        - Local path (if it exists)
+        - Hugging Face Hub into a cache_dir (creates it if missing)
+
+        Parameters:
+        ----------
+        model_name : str
+            Hugging Face model ID for downloading.
+        local_path : str or None
+            Path to a locally stored model. If None, only cache_dir is used.
+        cache_dir : str
+            Directory for caching downloaded models.
+        torch_dtype : str
+            Data type for model weights ("bfloat16", "float16", etc.).
+        trust_remote_code : bool
+            Allow execution of model code from the hub (needed for custom models).
+        """
+
+        # Ensure cache directory exists
+        os.makedirs(cache_dir, exist_ok=True)
+
+        if local_path and os.path.exists(local_path):
+            print(f"✅ Loading model from local path: {local_path}")
+            tokenizer = AutoTokenizer.from_pretrained(local_path, trust_remote_code=trust_remote_code, token=token)
+            model = AutoModelForCausalLM.from_pretrained(
+                local_path,
+                torch_dtype= torch.bfloat16,
+                trust_remote_code=trust_remote_code,
+                token=token
+            )
+        else:
+            if local_path:
+                print(f"⚠️ Local path not found: {local_path}. Downloading from Hugging Face Hub...")
+            else:
+                print(f"📥 Downloading model from Hugging Face Hub...")
+
+            tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir, trust_remote_code=trust_remote_code, token=token)
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                cache_dir=cache_dir,
+                torch_dtype= torch.bfloat16,
+                trust_remote_code=trust_remote_code,
+                token=token
+            )
+
+        tokenizer.pad_token = tokenizer.eos_token
+        return tokenizer, model    
 
     def generate_text(self, prompt, max_length=100):
         inputs = self.tokenizer(prompt, return_tensors="pt")

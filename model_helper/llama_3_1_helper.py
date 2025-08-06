@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List, Tuple, Dict
-from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep
+from activation_analyzer import ActivationAnalyzer, PredictionStep
 import os
 import argparse
 import deepspeed

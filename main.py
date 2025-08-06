@@ -7,8 +7,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import warnings  # Import warnings module
 from enum import Enum
-from LogitLens4LLMs.model_factory import ModelFactory, ModelType
-from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep   
+from model_factory import ModelFactory, ModelType
+from activation_analyzer import ActivationAnalyzer, PredictionStep   
 # from prompt_templates import TaskConfig, Concept, CrossDomainAnalogyConfig, PromptTemplate
 
 
@@ -112,15 +112,14 @@ def run_analysis(
             )
 
 def main():
-    token = "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"
     test_prompt = "Tell me the sotry of Avengers!"
     print("\nRunning logit lens test...")
     run_analysis(
         model_type= ModelType.LLAMA_3_1_70B,
-        token=token,
+        token="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",
         prompt=test_prompt,
         extract_middle_token_num = 3,
-        max_output_new_tokens=50,
+        max_output_new_tokens=5,
         num_trials=1,
         print_details=False,
         save_output=True,

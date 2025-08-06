@@ -6,6 +6,7 @@ import gc
 from einops import einsum
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
+from pathlib import Path
 
 # ========== Distributed Init ==========
 if not dist.is_initialized():
@@ -17,7 +18,8 @@ device = torch.device(f"cuda:{local_rank}")
 
 # ========== Load Tokenizer & Model ==========
 model_name = "meta-llama/Meta-Llama-3.1-70B"
-local_path = os.path.expanduser("~/LogitLens4LLMs/output/cache/models--meta-llama--Meta-Llama-3.1-70B/snapshots/349b2ddb53ce8f2849a6c168a81980ab25258dac")
+base_dir = Path(__file__).resolve().parent
+local_path = base_dir / "output" / "cache" / "models--meta-llama--Meta-Llama-3.1-70B" / "snapshots" / "349b2ddb53ce8f2849a6c168a81980ab25258dac"
 
 tokenizer = AutoTokenizer.from_pretrained(local_path, trust_remote_code=True)
 tokenizer.pad_token = tokenizer.eos_token
