@@ -133,7 +133,8 @@ class Llama3_1_70BHelper:
         
         # Setup for distributed GPU
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        world_size = int(os.environ.get("WORLD_SIZE", 4))
+        world_size = torch.cuda.device_count()
+        local_rank = local_rank % world_size  
         torch.cuda.set_device(local_rank)
         self.device = torch.device(f"cuda:{local_rank}")
         print(f"Using device: {self.device}, Local rank: {local_rank}, World size: {world_size}")
