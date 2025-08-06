@@ -1,17 +1,12 @@
 from enum import Enum
 from typing import Union, Dict, Type
-from LogitLens4LLMs.model_helper.llama_2_helper import Llama7BHelper
 from LogitLens4LLMs.model_helper.llama_3_1_helper import Llama3_1_8BHelper
 from LogitLens4LLMs.model_helper.llama_3_1_70B_helper import Llama3_1_70BHelper
-from LogitLens4LLMs.model_helper.qwen_helper import QwenHelper
-
 
 class ModelType(Enum):
     """Enumeration of supported model types"""
-    LLAMA_7B = "llama_7b"
     LLAMA_3_1_8B = "llama_3_1_8b"
     LLAMA_3_1_70B = "llama_3_1_70B"
-    QWEN_7B = "qwen_7b"
    
     
     @classmethod
@@ -26,10 +21,8 @@ class ModelFactory:
     """Factory class for creating and managing different types of model instances"""
     
     _model_registry: Dict[ModelType, Type] = {
-        ModelType.LLAMA_7B: Llama7BHelper,
         ModelType.LLAMA_3_1_8B: Llama3_1_8BHelper,
         ModelType.LLAMA_3_1_70B: Llama3_1_70BHelper,
-        ModelType.QWEN_7B: QwenHelper
     }
     
     @classmethod
@@ -46,12 +39,12 @@ class ModelFactory:
     def create_model(
         cls,
         model_type: ModelType,
-        use_local: bool = True,
+        use_local: bool = False,
         local_path: str = "./explanation/models_hf",
         token: str = None,
-        collect_attn_mech: bool = True,collect_intermediate_res: bool = True, collect_mlp:  bool = True, collect_block: bool = True,
+        collect_attn_mech: bool = False,collect_intermediate_res: bool = False, collect_mlp:  bool = False, collect_block: bool = True,
         **kwargs
-    ) -> Union[Llama7BHelper, Llama3_1_8BHelper,Llama3_1_70BHelper ]:
+    ) -> Union[ Llama3_1_8BHelper,Llama3_1_70BHelper ]:
         """Create a model instance
         
         Args:

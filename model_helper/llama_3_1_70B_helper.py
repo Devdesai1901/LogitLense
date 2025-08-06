@@ -72,7 +72,7 @@ class BlockOutputWrapper(torch.nn.Module):
 
         # Collect intermediate residual stream (after attention)
 
-                # Get hidden states
+        # Get hidden states
         if isinstance(output, tuple):
             hidden_states = output[0]
         else:
@@ -82,14 +82,14 @@ class BlockOutputWrapper(torch.nn.Module):
         if self.collect_intermediate_res:
             attn_output = self.block.self_attn.activations
             # last_attn = attn_output[:, -1:, :] if attn_output.ndim == 3 else attn_output.unsqueeze(1)
-            self.intermediate_res_unembedded = attn_output
-
+            # self.intermediate_resx_unembedded = attn_output
+            self.attn_mech_output_unembedded.append(attn_output[:, -1:, :])
         # mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
        
         if self.collect_mlp is not None:
             mlp_output = self.block.mlp.activations
             # last_mlp = mlp_output[:, -1:, :] if mlp_output.ndim == 3 else mlp_output.unsqueeze(1)
-            # self.mlp_output_unembedded = self.lm_head(self.norm(last_mlp))
+            self.mlp_output_unembedded.append(mlp_output[:, -1:, :])
 
 
         if self.collect_block:
@@ -126,7 +126,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Helper class to load and manage LLaMA 3.1–70B model with DeepSpeed and logit lens
 class Llama3_1_70BHelper:
-    def __init__(self, use_local=True, local_path="~/LogitLens4LLMs/output/cache/models--meta-llama--Meta-Llama-3.1-70B/snapshots/349b2ddb53ce8f2849a6c168a81980ab25258dac", token=None, collect_attn_mech=True, collect_intermediate_res=True, collect_mlp=True, collect_block=True):
+    def __init__(self, use_local=False, local_path="~/LogitLens4LLMs/output/cache/models--meta-llama--Meta-Llama-3.1-70B/snapshots/349b2ddb53ce8f2849a6c168a81980ab25258dac", token=None, collect_attn_mech=True, collect_intermediate_res=True, collect_mlp=True, collect_block=True):
         print("Initializing Llama-3.1-70B Helper...")
         see_memory_usage("Before initialization", force=True)
         
@@ -264,8 +264,6 @@ class Llama3_1_70BHelper:
             layer.intermediate_res_unembedded = None
             layer.mlp_output_unembedded = None
             layer.block_output_unembedded = None
-        # torch.cuda.empty_cache()
-        # gc.collect()
 
     def print_decoded_activations(self, decoded_activations, label, topk=10):
         softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)

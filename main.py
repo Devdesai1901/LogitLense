@@ -11,29 +11,7 @@ from LogitLens4LLMs.model_factory import ModelFactory, ModelType
 from LogitLens4LLMs.activation_analyzer import ActivationAnalyzer, PredictionStep   
 # from prompt_templates import TaskConfig, Concept, CrossDomainAnalogyConfig, PromptTemplate
 
-class ModelPath(Enum):
-    """Enumeration of local model paths"""
-    DEEPSEEK_LLAMA_8B = "/root/autodl-fs/models_hf/DeepSeek-R1-Distill-Llama-8B"
-    DEEPSEEK_QWEN_7B = "/root/autodl-fs/models_hf/DeepSeek-R1-Distill-Qwen-7B"
-    LLAMA_2_7B = "/root/autodl-fs/models_hf/Llama-2-7b"
-    LLAMA_3_1_8B = "/root/autodl-fs/models_hf/Llama-3.1-8b"
-    QWEN_7B = "/root/autodl-fs/models_hf/Qwen2.5-7B-Instruct"
-    
-    @classmethod
-    def get_path(cls, model_type: ModelType) -> str:
-        """Get local path corresponding to ModelType"""
-        path_mapping = {
-            ModelType.LLAMA_7B: cls.LLAMA_2_7B.value,
-            ModelType.LLAMA_3_1_8B: cls.LLAMA_3_1_8B.value,
-            ModelType.QWEN_7B: cls.QWEN_7B.value
-        }
-        if model_type not in path_mapping:
-            raise ValueError(f"No local path found for model type {model_type}")
-        return path_mapping[model_type]
 
-# HF_ENDPOINT=https://hf-mirror.com huggingface-cli download meta-llama/Llama-3.1-8b --local-dir /root/LACM/explanation/models_hf
-
-# warnings.filterwarnings("ignore")
 
 def run_analysis(
     model_type: ModelType,
@@ -46,9 +24,9 @@ def run_analysis(
     max_output_new_tokens: int = 10,
     save_output: bool = True,
     output_base_path: str = "./explanation/logit_lens",
-    collect_attn_mech: bool=True,
-    collect_intermediate_res: bool=True, 
-    collect_mlp: bool=True,
+    collect_attn_mech: bool=False,
+    collect_intermediate_res: bool=False, 
+    collect_mlp: bool=False,
     collect_block: bool=True
 ):
     """
@@ -68,7 +46,8 @@ def run_analysis(
     """
     local_path = None
     if use_local:
-        local_path = ModelPath.get_path(model_type)
+        print("This functionality to introduce in later versions")
+        sys.exit()
         
     model = ModelFactory.create_model(
         model_type=model_type,
@@ -105,6 +84,7 @@ def run_analysis(
         
         print(f"Output: {[prediction_steps[-1]['input_text']]+[prediction_steps[-1]['predicted_token']]}\n")
         print("Inference Complete")
+        print("Post Inference Generation Started")
         print("Generating JSON file and Heatmaps")
 
 
@@ -132,17 +112,15 @@ def run_analysis(
             )
 
 def main():
-    # Simple test example
     token = "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"
-    # Test 1: Basic logit lens functionality
-    test_prompt = "Generate a long History of how independence story of india."
-    print("\nRunning basic logit lens test...")
+    test_prompt = "Tell me the sotry of Avengers!"
+    print("\nRunning logit lens test...")
     run_analysis(
         model_type= ModelType.LLAMA_3_1_70B,
         token=token,
         prompt=test_prompt,
         extract_middle_token_num = 3,
-        max_output_new_tokens=10,
+        max_output_new_tokens=50,
         num_trials=1,
         print_details=False,
         save_output=True,
@@ -155,25 +133,6 @@ def main():
     gc.collect()
  
 
-# from LogitLens4LLMs.llm_steer.steer_vec_llama_3_1_8B import Steer
-
-# # Initialize Steer with LLaMA 3.1 8B
-# steer = Steer(device="cuda")
-
-# # Add a steering vector to layer 20
-# steer.add(
-#     layer_idx=20,
-#     coeff=0.5,
-#     text="This is a positive response.",
-#     try_keep_nr=1,
-#     exclude_bos_token=False,
-# )
-
-# # Get all steering vectors
-# print(steer.get_all())
-
-# # Reset steering for layer 20
-# steer.reset(20) 
 
 if __name__ == "__main__":
     main()
