@@ -65,7 +65,7 @@ Tested with:
 ---
 ## 📦 Installation
 ```bash
-git clone <repo_url>
+git clone https://github.com/Devdesai1901/LogitLense.git
 cd LogitLens4LLMs
 pip install -r requirements.txt
 ```
@@ -189,42 +189,31 @@ STEERED : Do you enjoy feature releases? If you do, you’re in luck. A new rele
 ```
 
 ---
+## 📌 Example: Running Logit Lens Analysis
+```bash
+deepspeed --num_gpus=4 --module LogitLens4LLMs.main
 
+Prompt : Tell me the sotry of Avengers!
+OutPut :  " (1 Viewer)\nThread starter TheBee\nTheBee\nI'm a new Marvel fan and I want to know more about them. Can you tell me their story?\nReactions: JtheDreamer, TheBee and Kage"
+```
+> **Note:**  
+> The heatmap visualization below shows the top-k token probabilities across all layers for a single generated token.  
+> This helps in understanding how the model’s predictions evolve layer-by-layer.
 
 
 
 ## Acknowledgments
 
 Thanks to the following projects for inspiration and support:
-
+-  [zhenyu-02](https://github.com/zhenyu-02/LogitLens4LLMs)
 - [Hugging Face Transformers](https://github.com/huggingface/transformers)
 - [Logit Lens](https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens)
 - [Logit Lens for Llama-2](https://www.lesswrong.com/posts/fJE6tscjGRPnK8C2C/decoding-intermediate-activations-in-llama-2-7b)
 
 ## Contact
 
-For any questions or suggestions, please contact me at [zhenyu_wang02@outlook.com](mailto:zhenyu_wang02@outlook.com).
+For any questions or suggestions, please contact me at [ddesai4@stevens.edu](mailto:ddesai4@stevens.edu).
 
-## Citation
-
-If you use this tool in your research, please cite it as:
-
-```bibtex
-@software{wang2024logitlens,
-  title = {LogitLens4LLMs: A Logit Lens Toolkit for Modern Large Language Models},
-  author = {Wang, Zhenyu},
-  year = {2025},
-  url = {https://github.com/zhenyu-02/LogitLens4LLMs},
-  version = {1.0.0},
-  date = {2025-02-17}
-}
-```
-
-Or in text:
-
-```
-Wang, Z. (2025). LogitLens4LLMs: A Logit Lens Toolkit for Modern Large Language Models (Version 1.0.0) [Computer software]. https://github.com/zhenyu-02/LogitLens4LLMs
-```
 
 ---
 
