@@ -233,6 +233,8 @@ Thanks to the following projects for inspiration and support:
 - [Hugging Face Transformers](https://github.com/huggingface/transformers)
 - [Logit Lens](https://www.lesswrong.com/posts/AcKRB8wDpdaN6v6ru/interpreting-gpt-the-logit-lens)
 - [Logit Lens for Llama-2](https://www.lesswrong.com/posts/fJE6tscjGRPnK8C2C/decoding-intermediate-activations-in-llama-2-7b)
+- [Medium Blog](https://bobrupakroy.medium.com/steering-large-language-models-with-activation-vectors-a-practical-guide-45866b3697ac)
+- 
 
 ## Contact
 
