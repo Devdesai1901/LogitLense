@@ -1,127 +1,197 @@
-# LogitLens4LLMs
 
-[中文文档](README_zh.md)
 
-LogitLens4LLMs is a toolkit for applying Logit Lens to modern large language models (LLMs). It supports layer-wise analysis of hidden states and predictions, currently compatible with Llama-3.1-8B and Qwen-2.5-7B models.
 
-## Features
+# LLM-Insight 
 
-- **Layer-wise Analysis**: Analyze model's hidden states and predictions layer by layer using Logit Lens technique.
-- **Multiple Model Support**: Currently supports Llama-3.1-8B and Qwen-2.5-7B models, with more to come.
-- **Visualization Output**: Generates heatmaps for intuitive visualization of predictions at each layer.
-- **Local Model Support**: Load models locally to reduce network dependency.
+**LLM‑Insight** is an interpretability toolkit that reveals what’s happening inside large language models. Using **Logit Lens** and **Steering Vectors**, it performs **layer‑wise analysis** of hidden states, visualizes how token predictions evolve, and outputs insights through heatmaps and JSON files.
 
-## Project Structure
+It also supports **hidden state steering**, letting you intentionally nudge model behavior to test ideas, reduce biases, or guide responses. This makes LLM‑Insight both a **diagnostic** and an **active** tool for improving the **explainability and transparency** of modern LLMs.
+
+
+
+Currently supports:
+- **Meta-LLaMA-3.1-70B** ✅ 
+- **Meta-LLaMA-3.1-8B** ✅
+- Designed to extend easily to other models.
+
+---
+
+## 🚀 Features
+
+- **Layer-wise Analysis (Logit Lens)** – Analyze model hidden states & predictions layer-by-layer.
+- **Steering Vectors** – Inject targeted changes into hidden states to influence outputs.
+- **Multi-Model Support** – Tested with Meta-LLaMA-3.1-70B and 8B.
+- **Visualization Outputs** – Generates heatmaps for each token at each layer.
+- **Local Model Support** – Load models locally to reduce network dependency.
+- **Distributed Inference with Model Parallelism** – Achieved via **DeepSpeed** + **PyTorch** + **Transformers**.
+- Optimized for **4× NVIDIA RTX A6000 (48GB)** GPUs with **250GB CPU RAM**.
+
+---
+
+## 📂 Project Structure
 
 ```
 LogitLens4LLMs/
-├── README.md
-├── README_zh.md
-├── requirements.txt
-├── main.py                    # Main program entry
-├── model_factory.py           # Model factory class
-├── activation_analyzer.py     # Activation analyzer
-├── model_helper/             # Model helper classes
-│   ├── llama_2_helper.py     # Llama-2 model helper
-│   ├── llama_3_1_helper.py   # Llama-3.1 model helper
-│   └── qwen_helper.py        # Qwen model helper
-├── colab_notebook/          # Colab example notebooks
-│   ├── logit_lens_Llama_3_1_8b.ipynb  # Llama-3.1-8B example
-│   └── logit_lens_Qwen_7b.ipynb       # Qwen-7B example
-└── output/                   # Output directory
-    └── visualizations/       # Visualization results
+├── README.md                   # This file
+├── requirements.txt            # Python dependencies
+├── main.py                     # Main entry for Logit Lens analysis
+├── llm_new_steer.py             # Main entry for Steering Vector experiments
+├── activation_analyzer.py      # Utilities for processing & visualizing activations
+├── model_factory.py            # Model loading factory
+├── model_helper/               # Model-specific helper classes
+│   ├── llama_3_1_70B_helper.py
+│   ├── llama_2_helper.py
+│   ├── qwen_helper.py
+├── output/                     # Output folder for caches & results
+│   ├── cache/                  # Model weights (downloaded on first run)
+│   ├── explanations/           # Heatmaps + JSON outputs for Logit Lens
+├── offload/                    # Disk offloading directory for large models
+├── visualizations/             # Generated plots
+├── myvenv/                     # (Optional) Virtual environment
 ```
 
-## Quick Start
+---
 
-### Local Setup
+## 🛠 Environment
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/zhenyu-02/LogitLens4LLMs
-   cd LogitLens4LLMs
-   ```
+Tested with:
+- **Python**: 3.12.3
+- **DeepSpeed**: 0.17.1
+- **PyTorch**: 2.7.1
+- **Transformers**: 4.52.4  
+- GPUs: **4× NVIDIA RTX A6000 (48GB each)**
+- CPU Memory: **250GB**
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+---
+## 📦 Installation
+```bash
+git clone <repo_url>
+cd LogitLens4LLMs
+pip install -r requirements.txt
+```
+## 🏃 Running the Code
+> **Note:** If running inside a virtual environment, first activate it, then navigate **out of all folders** to your **home directory** before running the command.  
+> Ensure you are **not** inside the `LogitLens4LLMs` folder — otherwise the module import will fail.
 
-### Google Colab
 
-We provide Google Colab notebooks for you to run examples directly in your browser:
+### **Logit Lens**
+```bash
+deepspeed --num_gpus=4 --module LogitLens4LLMs.main
+```
 
-- [Llama-3.1-8B Logit Lens Analysis](https://colab.research.google.com/drive/1OcYRKAsVI-me1zmtnhwoQfdyg6y_SVd3?usp=sharing)
-- [Qwen-7B Logit Lens Analysis](https://colab.research.google.com/drive/1xpBQSnukiNPka2oQDtLd7sKdQ0gt74PU?usp=sharing)
+### **Steering Vector**
+```bash
+deepspeed --num_gpus=4 --module LogitLens4LLMs.llm_new_steer
+```
 
-## Usage Example
+---
 
-Here's a simple example showing how to perform Logit Lens analysis on the Llama-3.1-8B model:
+## ⚠️ First-Time Run Notes
+- On first run, model checkpoints will be downloaded from HuggingFace into:
+```bash
+./output/cache
+```
+- This may take several minutes depending on network speed.
+- Then model is loaded in **Tensor Parallelism** across GPUs.
+- Second run onwards – startup is much faster due to local caching.
+
+---
+
+## 📊 Logit Lens Output
+When running `main.py`, a new folder:
+```bash
+/explanations/
+```
+will be created containing:
+- **heatmaps/** – PNG images showing per-token predictions at each layer.
+- **predictions.json** – Detailed per-token, per-layer activations & predictions.
+
+---
+
+## ⚙️ Logit Lens Arguments (`main.py → run_analysis()`)
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| model_type | ModelType | Required | Model type (e.g., LLAMA_3_1_70B) |
+| use_local | bool | False | Load from local cache instead of downloading |
+| token | str | None | HuggingFace auth token |
+| prompt | str | "" | Input text prompt |
+| num_trials | int | 5 | Number of generation trials |
+| extract_middle_token_num | int | 15 | Number of middle tokens to analyze |
+| print_details | bool | False | Print verbose prediction details |
+| max_output_new_tokens | int | 10 | Max tokens to generate |
+| save_output | bool | True | Save heatmaps & JSON |
+| output_base_path | str | "./explanations/logit_lens" | Output folder |
+| collect_attn_mech | bool | False | Collect attention mechanism outputs |
+| collect_intermediate_res | bool | False | Collect intermediate residuals |
+| collect_mlp | bool | False | Collect MLP outputs |
+| collect_block | bool | True | Collect block outputs |
+
+💡 **Performance Tip**: For best speed, collect only one component (usually `block_output`). Collecting multiple granular details increases memory use and slows inference.
+
+---
+
+## 🎯 Steering Vector Parameters
+
+### Prompt Arrays (inside `llm_new_steer.py`)
+```python
+enthusiastic_prompts = [ ... ]       # Target style prompts
+unenthusiastic_prompts = [ ... ]     # Base style prompts
+test_prompts = [ ... ]               # Prompts to test steering effect
+```
+
+### Main Functions
+```python
+find_steering_vecs(model, base_toks, target_toks, base_mask, target_mask, batch_size=2)
+```
+- Computes per-layer steering vectors from hidden state differences.
 
 ```python
-from logit_lens.model_factory import ModelFactory, ModelType
+do_steering(model, test_toks, test_mask, steering_vec=None, scale=1.0, normalise=True, layer=None, proj=True, batch_size=1)
+```
+- Injects steering vectors into hidden states before output.
 
-# Initialize model
-model_type = ModelType.LLAMA_3_1_8B
-model = ModelFactory.create_model(model_type, use_local=False)
+---
 
-# Run Logit Lens analysis
-prompt = "Complete this sentence: The cat sat on the"
-prediction_steps = model.generate_with_probing(prompt, max_new_tokens=10, print_details=True)
-
-# Output results
-for step in prediction_steps:
-    print(f"Step {step['step_idx']}: Predicted token: {step['predicted_token']}")
+## 📌 Example: Running Steering Vector Experiment
+```bash
+deepspeed --num_gpus=4 --module LogitLens4LLMs.llm_new_steer
 ```
 
-### Sample Output
-Command line output, automatically saved to local JSON file
+**Expected Output**:
 ```
-Running logit lens analysis:
-Model type: llama_3_1_8b
-Prompt: Complete this sentence: The cat sat on the
+--- LAYER 33 INTERVENTION ---
+Prompt: Tell me something exciting about today.
+BASELINE: Tell me something exciting about today. Did you get a new book? Did you go to a new place? Did you make a new friend?
+Tell me about the most beautiful thing you saw today.
+Tell me about something funny that happened today.
+Tell me about something you learned today.
+Tell me about something that made you sad today.
 
-Step 1: Predicted token: " mat"
-Current text: Complete this sentence: The cat sat on the mat
+STEERED : Tell me something exciting about today. What was the best thing that happened?
+I'm going to go out on a limb and guess that it wasn't a meeting.
+The only way to make a meeting interesting is to have it at a bar.
+Which is exactly what I did this week.
+I invited people to join me for a drink
 
-Important layers for this prediction:
+Prompt: Is this product launch important?
+BASELINE: Is this product launch important? Are the features worth talking about? Who cares?
+If your product launch feels like it’s not getting the attention it deserves, you’re not alone. Many companies struggle with this, especially in today’s world of information overload.
+But don’t worry, I’ve got you covered. In this article,
+STEERED : Is this product launch important? You bet it is. As you may recall, I've been on a personal quest to bring back the original recipe for Coca-Cola with cane sugar. I've even developed a Facebook page devoted to the cause. I'm not alone. There is a groundswell of support for this effort. And
 
-Layer 15:
-  attention_mechanism: [('mat', 85), ('floor', 12), ('carpet', 3)]
-  mlp_output: [('mat', 82), ('floor', 15), ('rug', 3)]
-  block_output: [('mat', 88), ('floor', 10), ('carpet', 2)]
+Prompt: Do you enjoy feature releases?
+BASELINE: Do you enjoy feature releases? I do. And this one is a little more special than usual. This is the first major release of our new team. We are proud of the result and hope you will be too.
+This is the first major release of our new team. We are proud of the result and hope you will be
+STEERED : Do you enjoy feature releases? If you do, you’re in luck. A new release has just dropped. If you don’t, don’t worry, we’ve got a new release for you as well. It’s a brand-new feature release. We’re calling it v0.1.0. It’s got some cool
 
-Layer 20:
-  attention_mechanism: [('mat', 90), ('floor', 8), ('rug', 2)]
-  block_output: [('mat', 92), ('floor', 7), ('carpet', 1)]
+
 ```
 
-## Visualization Output
+---
 
-The tool generates two types of heatmaps for each generation step:
 
-1. Important Layers Heatmap - Shows predictions from layers above threshold
-2. All Layers Heatmap - Shows predictions from all layers
 
-![ALL Layers Visualization](./output/visualizations/all_layers_step_0.png)
-
-## Supported Models
-
-Currently supported models include:
-
-- **Llama-3.1-8B**
-- **Qwen-2.5-7B**
-- **Llama-2-7B**
-
-More models will be supported in the future. Contributions are welcome.
-
-## Contributing
-
-Contributions are welcome! Please fork the repository and submit a Pull Request. We'll review and merge your code after review.
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
