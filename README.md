@@ -32,22 +32,23 @@ Currently supports:
 
 ```
 LogitLens4LLMs/
-├── README.md                   # This file
-├── requirements.txt            # Python dependencies
-├── main.py                     # Main entry for Logit Lens analysis
-├── llm_new_steer.py             # Main entry for Steering Vector experiments
-├── activation_analyzer.py      # Utilities for processing & visualizing activations
-├── model_factory.py            # Model loading factory
+├── README.md                     # Project overview and usage instructions
+├── requirements.txt             # Python package dependencies
+├── .gitignore                   # Git ignored files
+├── activation_analyzer.py      # Core module for activation analysis and logit lens
+├── llm_new_steer.py            # Steering vector module to manipulate hidden states
+├── main.py                     # Entry point for running Logit Lens analysis
+├── model_factory.py            # Utilities to load different models
 ├── model_helper/               # Model-specific helper classes
-│   ├── llama_3_1_70B_helper.py
-│   ├── llama_2_helper.py
-│   ├── qwen_helper.py
-├── output/                     # Output folder for caches & results
-│   ├── cache/                  # Model weights (downloaded on first run)
-│   ├── explanations/           # Heatmaps + JSON outputs for Logit Lens
-├── offload/                    # Disk offloading directory for large models
-├── visualizations/             # Generated plots
-├── myvenv/                     # (Optional) Virtual environment
+│   ├── __init__.py
+│   └── llama_3_1_70B_helper.py # Class for managing LLaMA 3.1–70B loading & probing
+│   └── llama_3_1_helper.py     # (Optional) Can support other LLaMA variants
+├── myenv/                      # Your local Python virtual environment
+│   └── (lib, bin, pyvenv.cfg)  # Environment-specific files (auto-generated)
+├── output/                     # Output directory for caching model files
+│   └── cache/                  # Cache folder for HuggingFace models
+│       └── models--meta-llama--Meta-Llama-3.1-70B/
+│           └── snapshots/...   # Downloaded model checkpoint directory
 ```
 
 ---
@@ -66,22 +67,24 @@ Tested with:
 ## 📦 Installation
 ```bash
 git clone https://github.com/Devdesai1901/LogitLense.git
-cd LogitLens4LLMs
+cd LogitLense
 pip install -r requirements.txt
 ```
 ## 🏃 Running the Code
-> **Note:** If running inside a virtual environment, first activate it, then navigate **out of all folders** to your **home directory** before running the command.  
-> Ensure you are **not** inside the `LogitLens4LLMs` folder — otherwise the module import will fail.
 
+> 🛑 **Important Prerequisite for Steering Vector:**  
+> Before running the `Steering Vector` module, you **must run the `Logit Lens` script at least once**.  
+> This ensures all required model checkpoints and tokenizer files are downloaded and cached locally.  
+> If skipped, the Steering Vector script may raise errors due to missing model or tokenizer files.
 
 ### **Logit Lens**
 ```bash
-deepspeed --num_gpus=4 --module LogitLens4LLMs.main
+deepspeed --num_gpus=4 --module main
 ```
 
 ### **Steering Vector**
 ```bash
-deepspeed --num_gpus=4 --module LogitLens4LLMs.llm_new_steer
+deepspeed --num_gpus=4 --module llm_new_steer
 ```
 
 ---
