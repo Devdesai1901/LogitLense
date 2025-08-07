@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from typing import List, Tuple, Dict
-from activation_analyzer import ActivationAnalyzer, PredictionStep
+from activation_analyzer import ActivationAnalyzer70B, PredictionStep
 from deepspeed.runtime.utils import see_memory_usage
 from pathlib import Path
 import os
@@ -80,27 +80,19 @@ class BlockOutputWrapper(torch.nn.Module):
             hidden_states = output
 
         
-        if self.collect_intermediate_res:
+        if self.collect_attn_mech:
             attn_output = self.block.self_attn.activations
-            # last_attn = attn_output[:, -1:, :] if attn_output.ndim == 3 else attn_output.unsqueeze(1)
-            # self.intermediate_resx_unembedded = attn_output
             self.attn_mech_output_unembedded.append(attn_output[:, -1:, :])
-        # mlp_output = self.block.mlp(self.post_attention_layernorm(attn_output))
+      
        
         if self.collect_mlp is not None:
             mlp_output = self.block.mlp.activations
-            # last_mlp = mlp_output[:, -1:, :] if mlp_output.ndim == 3 else mlp_output.unsqueeze(1)
             self.mlp_output_unembedded.append(mlp_output[:, -1:, :])
 
 
         if self.collect_block:
-            # last_hidden = hidden_states[:, -1:, :] if hidden_states.ndim == 3 else hidden_states.unsqueeze(1)
-            # self.block_output_unembedded = self.lm_head(self.norm(last_hidden))
             logits = hidden_states
-            # logits = self.lm_head(self.norm(hidden_states))
-            # self.block_output_unembedded.append(logits[:, -1:, :].detach().cpu())
             self.block_output_unembedded.append(logits[:, -1:, :])
-            # self.block_output_unembedded = hidden_states
 
         return output
 
@@ -391,16 +383,19 @@ class Llama3_1_70BHelper:
         for i, layer in enumerate(self.model.module.model.layers):
             layer_data = {}
             if collect_attn_mech and layer.attn_mech_output_unembedded is not None:
+                activations = torch.cat(layer.attn_mech_output_unembedded, dim=1)
                 layer_data['attention_mechanism'] = self.collect_decoded_activations(
-                    layer.attn_mech_output_unembedded, topk=topk
+                    activations, topk=topk
                 )
-            if collect_intermediate_res and layer.intermediate_res_unembedded is not None:
-                layer_data['intermediate_residual'] = self.collect_decoded_activations(
-                    layer.intermediate_res_unembedded, topk=topk
-                )
+            # if collect_intermediate_res and layer.intermediate_res_unembedded is not None:
+            #     activations = torch.cat(layer.intermediate_res_unembedded, dim=1)
+            #     layer_data['intermediate_residual'] = self.collect_decoded_activations(
+            #         activations, topk=topk
+            #     )
             if collect_mlp and layer.mlp_output_unembedded is not None:
+                activations = torch.cat(layer.mlp_output_unembedded, dim=1)
                 layer_data['mlp_output'] = self.collect_decoded_activations(
-                     layer.mlp_output_unembedded, topk=topk
+                     activations, topk=topk
                 )
             if collect_block and layer.block_output_unembedded is not None:
                 activations = torch.cat(layer.block_output_unembedded, dim=1)
@@ -418,7 +413,7 @@ class Llama3_1_70BHelper:
             "all_layers_data": all_layers_data,
             "important_layers": important_layers
         }
-
+        
 
         if print_details:
             print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
@@ -427,7 +422,7 @@ class Llama3_1_70BHelper:
             for layer_idx, components in important_layers.items():
                 print(f"\nLayer {layer_idx}:")
                 for component_name, tokens_probs in components.items():
-                    top_preds = ActivationAnalyzer.get_top_predictions(components, top_k=5)
+                    top_preds = ActivationAnalyzer70B.get_top_predictions(components, top_k=5)
                     print(f"  {component_name}: {top_preds[component_name]}")            
         print("Inference Complete")
         self.reset_all()

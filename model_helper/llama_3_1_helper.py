@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import List, Tuple, Dict
-from activation_analyzer import ActivationAnalyzer, PredictionStep
+from activation_analyzer_8B import ActivationAnalyzer8B, PredictionStep
 import os
 import argparse
 import deepspeed
@@ -296,7 +296,7 @@ class Llama3_1_8BHelper:
             predicted_token = self.tokenizer.decode(next_token_id[0])
             
             # Get important layers data
-            important_layers = ActivationAnalyzer.filter_important_layers(all_layers_data, threshold=threshold)
+            important_layers = ActivationAnalyzer8B.filter_important_layers(all_layers_data, threshold=threshold)
             
             # Record step data
             step_data = {
@@ -320,7 +320,7 @@ class Llama3_1_8BHelper:
                 for layer_idx, components in important_layers.items():
                     print(f"\nLayer {layer_idx}:")
                     for component_name, tokens_probs in components.items():
-                        top_preds = ActivationAnalyzer.get_top_predictions(components, top_k=5)
+                        top_preds = ActivationAnalyzer8B.get_top_predictions(components, top_k=5)
                         print(f"  {component_name}: {top_preds[component_name]}")
             else:
                 print(f"Step {step_idx + 1}: Generated '{predicted_token}'")
