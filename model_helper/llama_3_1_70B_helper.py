@@ -85,7 +85,7 @@ class BlockOutputWrapper(torch.nn.Module):
             self.attn_mech_output_unembedded.append(attn_output[:, -1:, :])
       
        
-        if self.collect_mlp is not None:
+        if self.collect_mlp:
             mlp_output = self.block.mlp.activations
             self.mlp_output_unembedded.append(mlp_output[:, -1:, :])
 
@@ -293,10 +293,10 @@ class Llama3_1_70BHelper:
     def reset_all(self):
         for layer in self.model.module.model.layers:
             layer.reset()
-            layer.attn_mech_output_unembedded = None
-            layer.intermediate_res_unembedded = None
-            layer.mlp_output_unembedded = None
-            layer.block_output_unembedded = None
+            layer.attn_mech_output_unembedded = []
+            layer.intermediate_res_unembedded = []
+            layer.mlp_output_unembedded = []
+            layer.block_output_unembedded = []
 
     def print_decoded_activations(self, decoded_activations, label, topk=10):
         softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)

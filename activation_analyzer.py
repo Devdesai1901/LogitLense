@@ -133,7 +133,7 @@ class ActivationAnalyzer70B:
                 values[i].extend([0] * pad_len)
                 annotations[i].extend([""] * pad_len)
 
-            plt.figure(figsize=(max_k * 1.8, len(values) * 0.6 + 2))
+            plt.figure(figsize=(max_k * 3, len(values) * 0.9 + 2))
             sns.heatmap(
                 np.array(values),
                 annot=np.array(annotations),

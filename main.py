@@ -110,14 +110,14 @@ def run_analysis(
                 )
 
 def main():
-    test_prompt = "Tell me the story of Avengers!"
+    test_prompt = "Burj Khalifa est la plus grande tour du monde"
     print("\nRunning logit lens test...")
     run_analysis(
         model_type=ModelType.LLAMA_3_1_70B,
         token="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",
         prompt=test_prompt,
         extract_middle_token_num=3,
-        max_output_new_tokens=5,
+        max_output_new_tokens=15,
         num_trials=1,
         print_details=False,
         save_output=True,
