@@ -47,21 +47,21 @@ gc.collect()
 
 # ========== Prompts ==========
 enthusiastic_prompts = [
-    "I'm so excited about the new product launch!",
-    "What a fantastic day we're having!",
-    "I can't wait to try this amazing new feature!"
+   "Let’s make this as fun as possible!",
+    "This is going to be a blast!",
+    "I can’t stop laughing about this!"
 ]
 
 unenthusiastic_prompts = [
-    "The new product launch happened.",
-    "It's just another day.",
-    "There's a new feature, I guess."
+       "We need to approach this with caution.",
+    "This is a matter that requires full focus.",
+    "Let’s stay on task and avoid distractions."
 ]
 
 test_prompts = [
-    "Tell me something exciting about today.",
-    "Is this product launch important?",
-    "Do you enjoy feature releases?"
+     "Should we make this more lighthearted?",
+    "Can we add some fun to this process?",
+    "Do you think this needs to be taken more seriously?"
 ]
 
 # ========== Tokenize with Attention Mask ==========

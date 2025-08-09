@@ -1,4 +1,7 @@
 import torch
+import argparse
+from model_helper.config import load_config
+from model_helper.model_io import load_tokenizer_and_model
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from typing import List, Tuple, Dict
 from activation_analyzer import ActivationAnalyzer70B, PredictionStep
@@ -46,7 +49,7 @@ class MLPWrapper(torch.nn.Module):
 
 # Wrapper around transformer block to collect various intermediate outputs
 class BlockOutputWrapper(torch.nn.Module):
-    def __init__(self, block, lm_head, norm, collect_attn_mech: bool = True, collect_intermediate_res: bool = True, collect_mlp: bool = True, collect_block: bool = True):
+    def __init__(self, block, lm_head, norm, collect_attn_mech: bool = True, collect_mlp: bool = True, collect_block: bool = True):
         super().__init__()
 
         self.block = block
@@ -54,7 +57,7 @@ class BlockOutputWrapper(torch.nn.Module):
         self.norm = norm
         
         self.collect_attn_mech = collect_attn_mech
-        self.collect_intermediate_res = collect_intermediate_res
+        # self.collect_intermediate_res = collect_intermediate_res
         self.collect_mlp = collect_mlp
         self.collect_block = collect_block
 
@@ -63,7 +66,7 @@ class BlockOutputWrapper(torch.nn.Module):
         self.post_attention_layernorm = self.block.post_attention_layernorm
 
         self.attn_mech_output_unembedded = []
-        self.intermediate_res_unembedded = []
+        # self.intermediate_res_unembedded = []
         self.mlp_output_unembedded = []
         self.block_output_unembedded = []
 
@@ -104,7 +107,7 @@ class BlockOutputWrapper(torch.nn.Module):
         self.block.mlp.reset()
         # Buffers to store unembedded outputs
         self.attn_mech_output_unembedded = []
-        self.intermediate_res_unembedded = []
+        # self.intermediate_res_unembedded = []
         self.mlp_output_unembedded = []
         self.block_output_unembedded = []
 
@@ -119,16 +122,15 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Helper class to load and manage LLaMA 3.1–70B model with DeepSpeed and logit lens
 class Llama3_1_70BHelper:
-    def __init__(self, use_local=True, local_path="", token=None, collect_attn_mech=True, collect_intermediate_res=True, collect_mlp=True, collect_block=True):
+    def __init__(self, cfg, collect_attn_mech=True, collect_mlp=True, collect_block=True):
         print("Initializing Llama-3.1-70B Helper...")
         see_memory_usage("Before initialization", force=True)
         
         # Setup for distributed GPU
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         world_size = torch.cuda.device_count()
-        local_rank = local_rank % world_size  
-        torch.cuda.set_device(local_rank)
-        self.device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(local_rank % world_size)
+        self.device = torch.device(f"cuda:{local_rank % world_size}")
         print(f"Using device: {self.device}, Local rank: {local_rank}, World size: {world_size}")
 
         try:
@@ -140,24 +142,19 @@ class Llama3_1_70BHelper:
             print(f"Error initializing DeepSpeed distributed: {e}")
             raise
         
-        
-        model_id = "meta-llama/Meta-Llama-3.1-70B"
-        # Base dir = project root (two levels up from this file)
-        base_dir = Path(__file__).resolve().parent.parent
-        localPath = base_dir / "output" / "cache" / "models--meta-llama--Meta-Llama-3.1-70B" / "snapshots" / "349b2ddb53ce8f2849a6c168a81980ab25258dac"
-        tokenizer, model = self.load_model_and_tokenizer(
-            local_path= localPath,  
-            cache_dir="output/cache",
-            torch_dtype="bfloat16",
-            token =  token
-        )
+        tokenizer, base_model, source = load_tokenizer_and_model(cfg)
+        print(f"[ModelLoader] Loaded from: {source}")
         self.tokenizer = tokenizer
+
+        tp = (world_size 
+        if str(cfg.get("tensor_parallel_size", "auto")).lower() == "auto" 
+        else int(cfg["tensor_parallel_size"]))
 
         print("Initializing DeepSpeed inference...")
         try:
             self.model = deepspeed.init_inference(
-                model,
-                tensor_parallel={"tp_size": world_size},
+                base_model,
+                tensor_parallel={"tp_size": tp},
                 dtype=torch.bfloat16,
                 replace_with_kernel_inject=False,
                 enable_cuda_graph=False  # Disable CUDA graph for memory savings
@@ -184,7 +181,6 @@ class Llama3_1_70BHelper:
                     lm_head,
                     norm,
                     collect_attn_mech=collect_attn_mech,
-                    collect_intermediate_res=collect_intermediate_res,
                     collect_mlp=collect_mlp,
                     collect_block=collect_block
                 )
@@ -209,63 +205,6 @@ class Llama3_1_70BHelper:
                 print(f"Error during cleanup: {e}")
         atexit.register(cleanup)
 
-    def load_model_and_tokenizer(
-    self,    
-    model_name="meta-llama/Meta-Llama-3.1-70B",
-    local_path=None,
-    cache_dir="output/cache",
-    torch_dtype="bfloat16",
-    token = None,
-    trust_remote_code=True
-    ):
-        """
-        Loads a tokenizer and model from either:
-        - Local path (if it exists)
-        - Hugging Face Hub into a cache_dir (creates it if missing)
-
-        Parameters:
-        ----------
-        model_name : str
-            Hugging Face model ID for downloading.
-        local_path : str or None
-            Path to a locally stored model. If None, only cache_dir is used.
-        cache_dir : str
-            Directory for caching downloaded models.
-        torch_dtype : str
-            Data type for model weights ("bfloat16", "float16", etc.).
-        trust_remote_code : bool
-            Allow execution of model code from the hub (needed for custom models).
-        """
-
-        # Ensure cache directory exists
-        os.makedirs(cache_dir, exist_ok=True)
-
-        if local_path and os.path.exists(local_path):
-            print(f"✅ Loading model from local path: {local_path}")
-            tokenizer = AutoTokenizer.from_pretrained(local_path, trust_remote_code=trust_remote_code, token=token)
-            model = AutoModelForCausalLM.from_pretrained(
-                local_path,
-                torch_dtype= torch.bfloat16,
-                trust_remote_code=trust_remote_code,
-                token=token
-            )
-        else:
-            if local_path:
-                print(f"⚠️ Local path not found: {local_path}. Downloading from Hugging Face Hub...")
-            else:
-                print(f"📥 Downloading model from Hugging Face Hub...")
-
-            tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir, trust_remote_code=trust_remote_code, token=token)
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                cache_dir=cache_dir,
-                torch_dtype= torch.bfloat16,
-                trust_remote_code=trust_remote_code,
-                token=token
-            )
-
-        tokenizer.pad_token = tokenizer.eos_token
-        return tokenizer, model    
 
     def generate_text(self, prompt, max_length=100):
         inputs = self.tokenizer(prompt, return_tensors="pt")
@@ -294,7 +233,7 @@ class Llama3_1_70BHelper:
         for layer in self.model.module.model.layers:
             layer.reset()
             layer.attn_mech_output_unembedded = []
-            layer.intermediate_res_unembedded = []
+            # layer.intermediate_res_unembedded = []
             layer.mlp_output_unembedded = []
             layer.block_output_unembedded = []
 
@@ -343,9 +282,8 @@ class Llama3_1_70BHelper:
     top_p: float = 0.3,    
     topk: int = 10,
     threshold: int = 3,
-    print_details: bool = True,
     collect_attn_mech: bool = True,
-    collect_intermediate_res: bool = True, 
+    # collect_intermediate_res: bool = True, 
     collect_mlp: bool = True,
     collect_block: bool = True
 ) -> List[PredictionStep]:
@@ -414,16 +352,16 @@ class Llama3_1_70BHelper:
             "important_layers": important_layers
         }
         
-
-        if print_details:
-            print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
-            print(f"Current text: {current_text}")
-            print("\nImportant layers for this prediction:")
-            for layer_idx, components in important_layers.items():
-                print(f"\nLayer {layer_idx}:")
-                for component_name, tokens_probs in components.items():
-                    top_preds = ActivationAnalyzer70B.get_top_predictions(components, top_k=5)
-                    print(f"  {component_name}: {top_preds[component_name]}")            
+        # future enhancment
+        # if print_details:
+        #     print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
+        #     print(f"Current text: {current_text}")
+        #     print("\nImportant layers for this prediction:")
+        #     for layer_idx, components in important_layers.items():
+        #         print(f"\nLayer {layer_idx}:")
+        #         for component_name, tokens_probs in components.items():
+        #             top_preds = ActivationAnalyzer70B.get_top_predictions(components, top_k=5)
+        #             print(f"  {component_name}: {top_preds[component_name]}")            
         print("Inference Complete")
         self.reset_all()
         return [prediction_step]
