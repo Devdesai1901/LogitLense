@@ -29,21 +29,14 @@ def load_tokenizer_and_model(cfg) -> Tuple[AutoTokenizer, AutoModelForCausalLM, 
     dtype      = _resolve_dtype(cfg.get("dtype", "bfloat16"))
 
     # Prefer explicit local_path if it exists
-    if local_path and Path(local_path).exists():
-        src = local_path
-        source_used = "local"
-        tok = AutoTokenizer.from_pretrained(src, trust_remote_code=trust_rc, token=token)
-        mdl = AutoModelForCausalLM.from_pretrained(
-            src, torch_dtype=dtype, trust_remote_code=trust_rc, token=token, low_cpu_mem_usage=True
-        )
-    else:
-        # Go to Hub; transformers will reuse cache if present or download otherwise
-        source_used = "hub"
-        kw = dict(trust_remote_code=trust_rc, token=token)
-        if cache_dir:
-            kw["cache_dir"] = cache_dir
-        tok = AutoTokenizer.from_pretrained(model_id, **kw)
-        mdl = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, low_cpu_mem_usage=True, **kw)
+   
+    # Go to Hub; transformers will reuse cache if present or download otherwise
+    source_used = "hub"
+    kw = dict(trust_remote_code=trust_rc, token=token)
+    if cache_dir:
+        kw["cache_dir"] = cache_dir
+    tok = AutoTokenizer.from_pretrained(model_id, **kw)
+    mdl = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=dtype, low_cpu_mem_usage=True, **kw)
 
     # sensible tokenizer defaults
     if tok.pad_token is None:
