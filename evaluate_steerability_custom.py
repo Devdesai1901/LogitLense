@@ -8,6 +8,8 @@ import torch.distributed as dist
 import deepspeed
 from einops import einsum
 from time import time
+import numpy as np
+import matplotlib.pyplot as plt
 
 from model_helper.config import load_config
 from model_helper.model_io import load_tokenizer_and_model
@@ -24,6 +26,36 @@ from model_helper.model_io import load_tokenizer_and_model
 #     b = tokenizer.encode(" B", add_special_tokens=False)
 #     assert len(a) == 1 and len(b) == 1, "Ensure the next token is a single 'A'/'B'. Adjust prompt tail if needed."
 #     return a[0], b[0]
+def plot_propensity_curve(multipliers, mean_vals, layer, out_png):
+    x = np.array(multipliers, dtype=float)
+    y = np.array(mean_vals, dtype=float)
+
+    # same slope/intercept as your code
+    xm = x.mean()
+    den = max(((x - xm) ** 2).sum(), 1e-12)
+    slope = float(((x - xm) @ (y - y.mean())) / den)
+    intercept = float(y.mean() - slope * xm)
+
+    yhat = slope * x + intercept
+    ss_res = float(((y - yhat) ** 2).sum())
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    r2 = 1.0 - ss_res / max(ss_tot, 1e-12)
+
+    # single chart, no seaborn, no custom colors
+    plt.figure()
+    plt.scatter(x, y, label="Mean propensity")
+    plt.plot(x, yhat, label="Linear fit")
+    plt.xlabel("Steering Multiplier")
+    plt.ylabel("Logit difference")
+    plt.title(f"Propensity curve (layer {layer})\nSlope={slope:.4f}, R²={r2:.3f}")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=200)
+    plt.close()
+
+    return {"slope": slope, "intercept": float(intercept), "r2": r2}
+
+
 
 def get_ab_token_ids_or_fail(tokenizer):
     ids_A = tokenizer.encode("A", add_special_tokens=False)
@@ -518,6 +550,10 @@ def main():
             json.dump(out, f, indent=2)
         print(f"[INFO] Results saved to {save_path}")
         print(json.dumps(out, indent=2))
+        png_path = f"steer_eval_layer{args.layer}_propensity.png"
+        metrics = plot_propensity_curve(valid_multipliers, mean_vals, args.layer, png_path)
+        print("[PLOT]", metrics, "->", png_path)
+
 
     torch.cuda.empty_cache(); gc.collect()
 
