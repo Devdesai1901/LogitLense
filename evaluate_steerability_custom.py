@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import deepspeed
+from einops import einsum
 from time import time
 
 from model_helper.config import load_config
@@ -89,7 +90,13 @@ def verify_one_token_via_logits(ds_engine, tokenizer, device, rows, format_promp
 
 
 def make_prompt_for_eval(q: str, tail: str = "Answer:") -> str:
-    return make_prompt(q)  # identical to build
+    q = q.rstrip()
+    return (
+        f"{q}\n\n"
+        "Reply with a single character ONLY: A or B.\n"
+        "Do not include parentheses, words, punctuation, spaces, or newlines.\n"
+        "Answer:"
+    )
 
 # ----------------- CLI -----------------
 def parse_args():
@@ -135,12 +142,39 @@ def make_lastpos_pre_hook(steering_vec, scale=1.0, normalize=False, norm_scale=F
         B, L, H = x.shape
         if L == 0:
             return
-        xs = x[:, L-1:L, :]  # only the decision state
+        xs = x[:, L-1, :]  # only the decision state
         alpha = scale * (xs.norm(dim=-1, keepdim=True).clamp_min(1e-6) if norm_scale else 1.0)
         xs += alpha * sv
-        x[:, L-1:L, :] = xs
+        x[:, L-1, :] = xs
     hook_fn.calls = calls
     return hook_fn
+
+# --- make an index-aware hook (works for both pre-MLP or residual hooks) ---
+def make_indexed_add_hook(steer_vec, get_pos_idx, scale=1.0, normalize=False, norm_scale=False):
+    calls = {"n": 0}
+    def hook_fn(_module, inputs, output=None):  # works for pre or post hooks
+        calls["n"] += 1
+        # Select the tensor we are editing:
+        x = inputs[0] if output is None else output          # [B, L, H]
+        if steer_vec is None or x is None: 
+            return None if output is None else output
+
+        sv = steer_vec.to(x.dtype)
+        if normalize:
+            sv = sv / (sv.norm() + 1e-9)
+
+        B, L, H = x.shape
+        pos_idx = get_pos_idx(B, L, x)                        # LongTensor [B]
+        # gather the slice [B, 1, H]
+        xs = x[torch.arange(B, device=x.device), pos_idx, :].unsqueeze(1)
+        alpha = scale * (xs.norm(dim=-1, keepdim=True).clamp_min(1e-6) if norm_scale else 1.0)
+        xs = xs + alpha * sv.view(1, 1, -1)
+        x[torch.arange(B, device=x.device), pos_idx, :] = xs.squeeze(1)
+
+        return None if output is None else x  # for forward_hook return the modified output
+    hook_fn.calls = calls
+    return hook_fn
+
 
 class SteeringContext:
     def __init__(self, layer_module, hook):
@@ -182,11 +216,9 @@ def split_rows(rows: List[dict], train_frac=0.4, val_frac=0, seed=0) -> Tuple[Li
     rng.shuffle(rows)
     n = len(rows)
     n_train = int(round(train_frac * n))
-    n_val = int(round(val_frac * n))
     train = rows[:n_train]
-    val   = rows[n_train:n_train+n_val]
-    test  = rows[n_train+n_val:]
-    return train, val, test
+    test  = rows[n_train:]
+    return train, test
 
 def make_prompt(question_text: str) -> str:
     q = question_text.rstrip()
@@ -194,7 +226,7 @@ def make_prompt(question_text: str) -> str:
         f"{q}\n\n"
         "Reply with a single character ONLY: A or B.\n"
         "Do not include parentheses, words, punctuation, spaces, or newlines.\n"
-        "Answer:"
+        "Answer: "
     )
 
 
@@ -228,6 +260,7 @@ def compute_steering_vec(
     """
     Build the steering vector at the decision state (last prompt token),
     using right padding and two clean passes (base, target) per microbatch.
+    Also print human-readable output from logits.
     """
     from time import time
     start = time()
@@ -243,7 +276,7 @@ def compute_steering_vec(
     old_side = tokenizer.padding_side
     tokenizer.padding_side = "right"
 
-    layer = ds_engine.module.model.layers[target_layer].mlp
+    layer = ds_engine.module.model.layers[target_layer]
 
     captured = None
     idx_holder = {"pos": None}  # (B,) decision indices
@@ -252,7 +285,6 @@ def compute_steering_vec(
         nonlocal captured
         hs = inputs[0]                   # [B, L, H], pre-MLP input
         rows = hs[torch.arange(hs.size(0), device=hs.device), idx_holder["pos"], :]
-        print("intermediate TOKENS", tokenizer.convert_ids_to_tokens(test_out))
         captured = rows.contiguous()     # [B, H]
 
     handle = layer.register_forward_pre_hook(pre_hook)
@@ -260,6 +292,30 @@ def compute_steering_vec(
     def tok(lst):  # right padding, no specials
         t = tokenizer(lst, return_tensors="pt", padding=True, truncation=True, add_special_tokens=False)
         return t.input_ids.to(device), t.attention_mask.to(device)
+
+    def logits_to_readable(logits, input_ids, tokenizer):
+        """Convert logits to human-readable tokens and probabilities."""
+        # Logits shape: [batch_size, sequence_length, vocab_size]
+        # Take logits at the last non-padding token for each sequence
+        batch_size, seq_len, vocab_size = logits.shape
+        last_token_idx = input_ids.ne(tokenizer.pad_token_id).sum(dim=1) - 1  # Index of last real token
+        last_logits = logits[torch.arange(batch_size), last_token_idx, :]  # [batch_size, vocab_size]
+        
+        # Apply softmax to get probabilities
+        probs = torch.softmax(last_logits, dim=-1)
+        # Get top predicted token IDs and their probabilities
+        top_probs, top_ids = torch.topk(probs, k=3, dim=-1)  # Top 3 for readability
+        top_tokens = [[tokenizer.decode([id_]) for id_ in ids] for ids in top_ids]
+        
+        # Decode input texts for context
+        input_texts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+        
+        # Print human-readable output
+        for i in range(batch_size):
+            print(f"\nInput text: {input_texts[i]}")
+            print("Top 3 predicted tokens and probabilities:")
+            for j in range(3):
+                print(f"  Token: '{top_tokens[i][j]}', Probability: {top_probs[i][j]:.4f}")
 
     N = min(len(base_texts), len(target_texts))
     sum_delta = None
@@ -275,17 +331,25 @@ def compute_steering_vec(
         # 1) prompt-only lengths (right padded → index is T-1)
         p_ids, p_mask = tok(prompts)             # [B, Tp]
         T = p_mask.sum(dim=1).to(torch.long)     # [B]
-        pos_idx = T - 1                          # last prompt token (decision state)
+        pos_idx = T-1                        # last prompt token (decision state)
         idx_holder["pos"] = pos_idx
 
-        # 2) forward base; hook grabs decision states
+        # decision_token_id = p_ids[0, pos_idx].item()
+        # Decode the token ID to get the human-readable token
+        # decision_token_str = tokenizer.decode([decision_token_id])
+        # print("decision_token_id" , decision_token_id)
+        # 2) forward base; hook grabs decision states and capture logits
         b_ids, b_mask = tok(base_batch)
-        _ = ds_engine(input_ids=b_ids, attention_mask=b_mask)
+        base_output = ds_engine(input_ids=b_ids, attention_mask=b_mask)
+        print("\n=== Base Batch Logits ===")
+        logits_to_readable(base_output.logits, b_ids, tokenizer)
         base_vec = captured                     # [B, H]
 
-        # 3) forward target; hook grabs decision states
+        # # 3) forward target; hook grabs decision states and capture logits
         t_ids, t_mask = tok(targ_batch)
-        _ = ds_engine(input_ids=t_ids, attention_mask=t_mask)
+        targ_output = ds_engine(input_ids=t_ids, attention_mask=t_mask)
+        print("\n=== Target Batch Logits ===")
+        logits_to_readable(targ_output.logits, t_ids, tokenizer)
         targ_vec = captured                     # [B, H]
 
         delta = (targ_vec - base_vec)           # [B, H]
@@ -335,7 +399,7 @@ def main():
     if dist.get_rank() == 0:
         print("[INFO] Loading dataset and making 40/10/50 split...")
     all_rows = load_jsonl(args.dataset, shuffle=True, seed=args.split_seed)
-    train_rows, val_rows, test_rows = split_rows(all_rows, train_frac=args.train_frac, val_frac=args.val_frac, seed=args.split_seed)
+    train_rows, test_rows = split_rows(all_rows, train_frac=args.train_frac, val_frac=args.val_frac, seed=args.split_seed)
 
     # Build SV from TRAIN split: positive (target) vs negative (base)
     train_rows_for_sv = train_rows[:args.sv_max_items] if args.sv_max_items > 0 else train_rows
@@ -347,7 +411,7 @@ def main():
         batch_size=args.batch_size, target_layer=args.layer
     ).to(device)
 
-    layer_module = ds_engine.module.model.layers[args.layer].mlp
+    layer_module = ds_engine.module.model.layers[args.layer]
 
     # Prepare TEST split for evaluation
     eval_rows = test_rows[:args.max_items] if args.max_items > 0 else test_rows
@@ -447,7 +511,7 @@ def main():
             "slope": float(slope),
             "intercept": float(intercept),
             "sv_counts": {"train_rows": len(train_rows_for_sv)},
-            "splits": {"train": len(train_rows), "val": len(val_rows), "test": len(test_rows)},
+            "splits": {"train": len(train_rows),  "test": len(test_rows)},
         }
         save_path = Path(f"steer_eval_layer{args.layer}_results.json")
         with open(save_path, "w") as f:
