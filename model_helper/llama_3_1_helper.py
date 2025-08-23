@@ -229,10 +229,11 @@ class Llama3_1_8BHelper:
         top_p: float = 0.9,
         topk: int = 10,
         threshold: int = 3,
-        print_details: bool = True,
+        print_details: bool = False,
         collect_attn_mech: bool = True,
         collect_mlp: bool = True,
-        collect_block: bool = True
+        collect_block: bool = True,
+        **kwargs
     ) -> List[PredictionStep]:
         """
         Generate text and record the prediction process for each token
@@ -281,7 +282,7 @@ class Llama3_1_8BHelper:
             predicted_token = self.tokenizer.decode(next_token_id[0])
             
             # Get important layers data
-            important_layers = ActivationAnalyzer8B.filter_important_layers(all_layers_data, threshold=threshold)
+            # important_layers = ActivationAnalyzer8B.filter_important_layers(all_layers_data, threshold=threshold)
             
             # Record step data
             step_data = {
@@ -289,7 +290,7 @@ class Llama3_1_8BHelper:
                 "input_text": current_text,
                 "predicted_token": predicted_token,
                 "all_layers_data": all_layers_data,
-                "important_layers": important_layers
+                "important_layers": {}
             }
             prediction_steps.append(step_data)
             
@@ -307,7 +308,6 @@ class Llama3_1_8BHelper:
                     for component_name, tokens_probs in components.items():
                         top_preds = ActivationAnalyzer8B.get_top_predictions(components, top_k=5)
                         print(f"  {component_name}: {top_preds[component_name]}")
-            else:
-                print(f"Step {step_idx + 1}: Generated '{predicted_token}'")
+            
         
         return prediction_steps 

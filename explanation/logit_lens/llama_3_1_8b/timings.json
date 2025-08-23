@@ -1,0 +1,28 @@
+{
+  "run": {
+    "model": "llama_3_1_8b",
+    "prompt": " Tell me something about our beautiful world  ",
+    "num_trials": 1,
+    "start_time_iso": "2025-08-23T00:27:18",
+    "end_time_iso": "2025-08-23T00:51:15",
+    "duration_seconds": 1437.091007232666
+  },
+  "trials": [
+    {
+      "trial_index": 0,
+      "start_time_iso": "2025-08-23T00:27:18",
+      "end_time_iso": "2025-08-23T00:51:15",
+      "duration_seconds": 1437.08425116539,
+      "analysis_method": "Running Logit Lens",
+      "generate_with_probing_seconds": 1437.084222793579,
+      "generation_name": "heat map",
+      "convert_to_token_major_seconds": null,
+      "heat_map_seconds": 2.384185791015625e-07,
+      "json_dump_seconds": 7.152557373046875e-07,
+      "paths": {
+        "trial_dir": "./explanation/logit_lens/llama_3_1_8b/trial_0",
+        "visualizations_dir": "./explanation/logit_lens/llama_3_1_8b/trial_0/visualizations"
+      }
+    }
+  ]
+}

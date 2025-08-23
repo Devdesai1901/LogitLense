@@ -1,5 +1,6 @@
 import torch
 import argparse
+import numpy as np
 from model_helper.config import load_config
 from model_helper.model_io import load_tokenizer_and_model
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
@@ -122,7 +123,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Helper class to load and manage LLaMA 3.1–70B model with DeepSpeed and logit lens
 class Llama3_1_70BHelper:
-    def __init__(self, cfg, collect_attn_mech=True, collect_mlp=True, collect_block=True):
+    def __init__(self, cfg, collect_attn_mech=True, collect_mlp=True, collect_block=True, selected_layers: List[int] = [10,15,25,35,79]):
         print("Initializing Llama-3.1-70B Helper...")
         see_memory_usage("Before initialization", force=True)
         
@@ -145,6 +146,8 @@ class Llama3_1_70BHelper:
         tokenizer, base_model, source = load_tokenizer_and_model(cfg)
         print(f"[ModelLoader] Loaded from: {source}")
         self.tokenizer = tokenizer
+        self.selected_layers = set(selected_layers or [])  # save for later
+
 
         tp = (world_size 
         if str(cfg.get("tensor_parallel_size", "auto")).lower() == "auto" 
@@ -174,18 +177,21 @@ class Llama3_1_70BHelper:
 
             self.lm_head = lm_head
             self.norm = norm
-
-            base_model.layers = torch.nn.ModuleList([
-                BlockOutputWrapper(
-                    layer,
-                    lm_head,
-                    norm,
-                    collect_attn_mech=collect_attn_mech,
-                    collect_mlp=collect_mlp,
-                    collect_block=collect_block
-                )
-                for layer in base_model.layers
-            ])
+            new_layers = []
+            for i, layer in enumerate(base_model.layers):
+                if i in self.selected_layers:
+                    print("using BlockOut put wrappering ")
+                    new_layers.append(
+                        BlockOutputWrapper(
+                            layer, self.lm_head, self.norm,
+                            collect_attn_mech=collect_attn_mech,
+                            collect_mlp=collect_mlp,
+                            collect_block=collect_block
+                        )
+                    )
+                else:
+                    new_layers.append(layer)
+            base_model.layers = torch.nn.ModuleList(new_layers)
             print("All layers wrapped successfully")
         except Exception as e:
             print(f"Error wrapping layers: {e}")
@@ -230,12 +236,15 @@ class Llama3_1_70BHelper:
         return self.model.module.model.layers[layer].get_attn_activations()
 
     def reset_all(self):
-        for layer in self.model.module.model.layers:
+        if not self.selected_layers:
+            return
+        for i in self.selected_layers:
+            layer = self.model.module.model.layers[i]
             layer.reset()
             layer.attn_mech_output_unembedded = []
-            # layer.intermediate_res_unembedded = []
             layer.mlp_output_unembedded = []
             layer.block_output_unembedded = []
+
 
     def print_decoded_activations(self, decoded_activations, label, topk=10):
         softmaxed = torch.nn.functional.softmax(decoded_activations[0][-1], dim=-1)
@@ -244,35 +253,55 @@ class Llama3_1_70BHelper:
         tokens = self.tokenizer.batch_decode(indices.unsqueeze(-1))
         print(label, list(zip(tokens, probs_percent)))
 
+
+
     def collect_decoded_activations(
     self,
     hidden_activations: torch.Tensor,
-    topk: int = 10
+    topk: int = 3
     ) -> List[List[Tuple[str, int]]]:
         """
-        Return top-k decoded tokens for **each token** in the sequence.
+        Vectorized logit-lens decode for ALL tokens at once:
+        H -> norm -> lm_head -> topk (per position)
+        Returns: List[length T] of [(token_str, prob_percent), ...] length topk
         """
-        token_outputs = []
-        seq_len = hidden_activations.shape[1]
-        for t in range(seq_len):
-            # 1. Extract the hidden state for token position t
-            hid_t = hidden_activations[:, t, :]  # shape [1, hidden_dim]
-            # 2. Apply final layer normalization
-            normed = self.norm(hid_t) 
-            normed = normed.unsqueeze(1).contiguous()
-            logits = self.lm_head(normed)  
-            logits = logits.squeeze(1)
-            # 4. Get top-K predictions
-            values, indices = torch.topk(logits[0], topk, dim=-1)
-            # 5. Calculate relative probabilities for top-K (optional)
-            probs = torch.nn.functional.softmax(values, dim=-1)  # softmax over just top-K values
-            probs_percent = [int(p.item() * 100) for p in probs]
-            # 6. Decode token IDs to strings
-            tokens = self.tokenizer.batch_decode(indices.unsqueeze(1))
-            token_outputs.append(list(zip(tokens, probs_percent)))
-        return token_outputs
+        with torch.inference_mode():
+            if hidden_activations.dim() == 2:   # [T, H] -> [1, T, H]
+                hidden_activations = hidden_activations.unsqueeze(0)
 
-    
+            # Ensure shape [1, T, H] and dtype/device match lm_head weights
+            H = hidden_activations.contiguous()
+            target_dtype = self.lm_head.weight.dtype
+            # LLaMA's final norm (RMSNorm) supports [B, T, H] directly
+            normed = self.norm(H).to(target_dtype)          # [1, T, H]
+            logits = self.lm_head(normed)                   # [1, T, V]
+            # Top-k per token position (vectorized)
+            topk_vals, topk_idx = torch.topk(logits, k=topk, dim=-1)  # [1, T, k]
+            probs = torch.softmax(topk_vals, dim=-1)                   # [1, T, k]
+
+            # Move small results to CPU for token string conversion
+            topk_idx_cpu = topk_idx.squeeze(0).cpu()               # [T, k]
+            probs_cpu = (probs.squeeze(0) * 100).to(torch.int16).cpu()  # [T, k]
+
+            # Convert IDs -> tokens efficiently
+            T, K = topk_idx_cpu.shape
+            flat_ids = topk_idx_cpu.reshape(-1, 1).tolist()
+            decoded = self.tokenizer.batch_decode(
+            flat_ids,
+            skip_special_tokens=True,              # keep False if you want to see specials
+            clean_up_tokenization_spaces=False     # don't collapse spaces
+            )
+            # Back to [T, k]
+            decoded = np.array(decoded, dtype=object).reshape(T, K)
+
+            decoded_ll = decoded.tolist()
+            probs_ll = probs_cpu.tolist()
+
+            # One comprehension (row-wise zip), no inner for-loop
+            outputs = [list(zip(row_tokens, row_probs))
+                    for row_tokens, row_probs in zip(decoded_ll, probs_ll)]
+
+            return outputs
 
     def generate_with_probing(
     self,
@@ -280,56 +309,56 @@ class Llama3_1_70BHelper:
     max_new_tokens: int = 20,
     temperature: float = 1.0,
     top_p: float = 0.3,    
-    topk: int = 10,
+    topk: int = 3,
     threshold: int = 3,
     collect_attn_mech: bool = True,
-    # collect_intermediate_res: bool = True, 
     collect_mlp: bool = True,
-    collect_block: bool = True
+    collect_block: bool = True,
+    selected_layers: List[int] = [10,15,25,35,79]
 ) -> List[PredictionStep]:
+        # Determine which layers to unembed (default to first 5 layers)
+        total_layers = len(self.model.module.model.layers)
+        if selected_layers is None:
+            # Default: first 5 layers or all if fewer
+            selected_layers = list(range(min(5, total_layers)))
+        
         prediction_steps = []
         current_text = prompt
 
         tokenized = self.tokenizer(prompt, return_tensors="pt", truncation=True)
         input_ids = tokenized.input_ids.to(self.device)
         attention_mask = tokenized.attention_mask.to(self.device)
-
-
-
+        sel = sorted(self.selected_layers) if self.selected_layers else sorted(set(selected_layers))
         with torch.no_grad():
             generated_ids = self.model.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 do_sample=True,
-                max_new_tokens = max_new_tokens,
+                max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_p=top_p,
-                repetition_penalty=1.1,
                 eos_token_id=None,
                 use_cache=True
             )
 
-        # decode final output
+        # Decode the final text
         decoded_text = self.tokenizer.decode(
             generated_ids[0],
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False
         )
 
-
         all_layers_data = {}
-        for i, layer in enumerate(self.model.module.model.layers):
+        # Loop over each layer and collect decoded activations only for selected layers
+        for i in sel:
+            layer = self.model.module.model.layers[i]
             layer_data = {}
+            # Stack CPU-captured slices into [T, H] once, then decode
             if collect_attn_mech and layer.attn_mech_output_unembedded is not None:
                 activations = torch.cat(layer.attn_mech_output_unembedded, dim=1)
                 layer_data['attention_mechanism'] = self.collect_decoded_activations(
                     activations, topk=topk
                 )
-            # if collect_intermediate_res and layer.intermediate_res_unembedded is not None:
-            #     activations = torch.cat(layer.intermediate_res_unembedded, dim=1)
-            #     layer_data['intermediate_residual'] = self.collect_decoded_activations(
-            #         activations, topk=topk
-            #     )
             if collect_mlp and layer.mlp_output_unembedded is not None:
                 activations = torch.cat(layer.mlp_output_unembedded, dim=1)
                 layer_data['mlp_output'] = self.collect_decoded_activations(
@@ -341,27 +370,15 @@ class Llama3_1_70BHelper:
                     activations, topk=topk
                 )
             all_layers_data[i] = layer_data
-        # important_layers = ActivationAnalyzer.filter_important_layers(all_layers_data, threshold=threshold)
-        important_layers = {}
-    
+
+        # (The rest of the method remains unchanged: building PredictionStep, resetting, etc.)
         prediction_step: PredictionStep = {
             "step_idx": 0,
             "input_text": prompt,
-            "predicted_token": decoded_text[len(prompt):],  # only new tokens
+            "predicted_token": decoded_text[len(prompt):],
             "all_layers_data": all_layers_data,
-            "important_layers": important_layers
+            "important_layers": {}
         }
-        
-        # future enhancment
-        # if print_details:
-        #     print(f"\nStep {step_idx + 1}: Predicted token: {predicted_token}")
-        #     print(f"Current text: {current_text}")
-        #     print("\nImportant layers for this prediction:")
-        #     for layer_idx, components in important_layers.items():
-        #         print(f"\nLayer {layer_idx}:")
-        #         for component_name, tokens_probs in components.items():
-        #             top_preds = ActivationAnalyzer70B.get_top_predictions(components, top_k=5)
-        #             print(f"  {component_name}: {top_preds[component_name]}")            
         print("Inference Complete")
         self.reset_all()
         return [prediction_step]

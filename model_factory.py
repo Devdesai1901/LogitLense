@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Union, Dict, Type, Any
+from typing import Union, Dict, Type, Any, List
 from model_helper.llama_3_1_helper import Llama3_1_8BHelper
 from model_helper.llama_3_1_70B_helper import Llama3_1_70BHelper
 
@@ -39,6 +39,7 @@ class ModelFactory:
         collect_block: bool = True,
         # ---- 70B signature arg ----
         cfg: dict | None = None,
+        selected_layers: List[int] = [10,15,25,35,79],
         **kwargs: Any
     ) -> Union[Llama3_1_8BHelper, Llama3_1_70BHelper]:
         if model_type not in cls._model_registry:
@@ -65,6 +66,7 @@ class ModelFactory:
                 collect_attn_mech=collect_attn_mech,
                 collect_mlp=collect_mlp,
                 collect_block=collect_block,
+                selected_layers = selected_layers,
                 **kwargs
             )
 

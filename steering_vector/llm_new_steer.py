@@ -1,5 +1,6 @@
 # steer_vector.py
-import os, gc, argparse
+import os, gc, argparse, sys, json, time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 import torch
@@ -8,8 +9,27 @@ import deepspeed
 from einops import einsum
 from tqdm import tqdm
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from model_helper.config import load_config
 from model_helper.model_io import load_tokenizer_and_model
+
+# ----------------- Timing helpers -----------------
+def now_iso():
+    return datetime.now().isoformat(timespec="seconds")
+
+def barrier_safe():
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+
+def is_rank0():
+    return (not dist.is_available()) or (not dist.is_initialized()) or (dist.get_rank() == 0)
+
+def record_block(timings: dict, key: str, start_ts: str, end_ts: str, start_pc: float, end_pc: float):
+    timings[key] = {
+        "start": start_ts,
+        "end": end_ts,
+        "seconds": round(end_pc - start_pc, 6),
+    }
 
 # ----------------- CLI -----------------
 def parse_args():
@@ -22,6 +42,7 @@ def parse_args():
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--save_dir", default="./explanation/steering")
+    ap.add_argument("--timing_json", default="timings_steer70b.json", help="Where to save timing JSON (rank 0 only)")
     return ap.parse_known_args()[0]
 
 # ----------------- Prompts -----------------
@@ -146,6 +167,25 @@ def main():
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
 
+    timings = {
+        "script": "steer_vector.py",
+        "config": args.config,
+        "env": {
+            "world_size": dist.get_world_size() if dist.is_initialized() else 1,
+            "batch_size": args.batch_size,
+            "layer_stride": args.layer_stride,
+            "max_new_tokens": args.max_new_tokens,
+            "top_p": args.top_p,
+            "temperature": args.temperature,
+        },
+        "blocks": {}
+    }
+
+    # ----- TOTAL start -----
+    barrier_safe()
+    total_start_ts = now_iso()
+    total_start_pc = time.perf_counter()
+
     # ----- Load cfg/tokenizer/model -----
     cfg = load_config(args.config)
     tokenizer, base_model, source = load_tokenizer_and_model(cfg)
@@ -167,15 +207,33 @@ def main():
     ds_engine.eval()
 
     # ----- Tokenize data -----
-    base_toks, base_mask   = tokenize_prompts(tokenizer, device, unenthusiastic_prompts)
+    base_toks, base_mask     = tokenize_prompts(tokenizer, device, unenthusiastic_prompts)
     target_toks, target_mask = tokenize_prompts(tokenizer, device, enthusiastic_prompts)
-    test_toks, test_mask   = tokenize_prompts(tokenizer, device, test_prompts)
+    test_toks, test_mask     = tokenize_prompts(tokenizer, device, test_prompts)
 
-    # ----- Compute steering vecs -----
-    steering_vecs = find_steering_vecs(ds_engine, tokenizer, device, base_toks, target_toks, base_mask, target_mask, batch_size=args.batch_size)
+    # ----- Steering-vector computation -----
+    barrier_safe()
+    sv_start_ts = now_iso()
+    sv_start_pc = time.perf_counter()
 
-    # ----- Baseline -----
+    steering_vecs = find_steering_vecs(
+        ds_engine, tokenizer, device,
+        base_toks, target_toks, base_mask, target_mask,
+        batch_size=args.batch_size
+    )
+
+    barrier_safe()
+    sv_end_pc = time.perf_counter()
+    sv_end_ts = now_iso()
+    if is_rank0():
+        record_block(timings["blocks"], "steering_vector", sv_start_ts, sv_end_ts, sv_start_pc, sv_end_pc)
+
+    # ----- Baseline (no injection) -----
     BATCH_SIZE = len(test_prompts)
+    barrier_safe()
+    base_start_ts = now_iso()
+    base_start_pc = time.perf_counter()
+
     baseline_outputs = do_steering(
         ds_engine, tokenizer, device,
         test_toks, test_mask,
@@ -187,18 +245,35 @@ def main():
         temperature=args.temperature
     )
 
-    # ----- Interventions -----
-    if dist.get_rank() == 0:
+    barrier_safe()
+    base_end_pc = time.perf_counter()
+    base_end_ts = now_iso()
+    if is_rank0():
+        record_block(timings["blocks"], "baseline_generation", base_start_ts, base_end_ts, base_start_pc, base_end_pc)
         print("\n--- BASELINE OUTPUTS ---")
         for j, out in enumerate(baseline_outputs):
             print(f"Prompt: {test_prompts[j]}")
             print("BASELINE:", tokenizer.decode(out, skip_special_tokens=True))
 
+    # ----- Steered generation (overall + per-layer) -----
+    barrier_safe()
+    steer_all_start_ts = now_iso()
+    steer_all_start_pc = time.perf_counter()
+
+    per_layer = {}
     for layer in range(1, len(ds_engine.module.model.layers), args.layer_stride):
+        sv = steering_vecs.get(layer)
+        if sv is None:
+            continue
+
+        barrier_safe()
+        layer_start_ts = now_iso()
+        layer_start_pc = time.perf_counter()
+
         steered_outputs = do_steering(
             ds_engine, tokenizer, device,
             test_toks, test_mask,
-            steering_vec=steering_vecs[layer].to(device),
+            steering_vec=sv.to(device),
             layer=layer,
             batch_size=BATCH_SIZE,
             proj=True,
@@ -206,11 +281,43 @@ def main():
             top_p=args.top_p,
             temperature=args.temperature
         )
-        if dist.get_rank() == 0:
+
+        barrier_safe()
+        layer_end_pc = time.perf_counter()
+        layer_end_ts = now_iso()
+
+        if is_rank0():
+            per_layer[str(layer)] = {
+                "start": layer_start_ts,
+                "end": layer_end_ts,
+                "seconds": round(layer_end_pc - layer_start_pc, 6),
+            }
             print(f"\n--- LAYER {layer} INTERVENTION ---")
             for j in range(len(steered_outputs)):
                 print(f"Prompt: {test_prompts[j]}")
                 print("STEERED :", tokenizer.decode(steered_outputs[j], skip_special_tokens=True))
+
+    barrier_safe()
+    steer_all_end_pc = time.perf_counter()
+    steer_all_end_ts = now_iso()
+    if is_rank0():
+        timings["blocks"]["steered_generation_overall"] = {
+            "start": steer_all_start_ts,
+            "end": steer_all_end_ts,
+            "seconds": round(steer_all_end_pc - steer_all_start_pc, 6),
+        }
+        timings["blocks"]["steered_generation_per_layer"] = per_layer
+
+    # ----- TOTAL end -----
+    barrier_safe()
+    total_end_pc = time.perf_counter()
+    total_end_ts = now_iso()
+    if is_rank0():
+        record_block(timings["blocks"], "total", total_start_ts, total_end_ts, total_start_pc, total_end_pc)
+        with open(args.timing_json, "w") as f:
+            json.dump(timings, f, indent=2)
+        print(f"[timing] Wrote timing JSON to: {args.timing_json}")
+        print(json.dumps(timings["blocks"], indent=2))
 
     torch.cuda.empty_cache(); gc.collect()
 

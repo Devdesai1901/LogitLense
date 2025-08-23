@@ -26,25 +26,26 @@ class ActivationAnalyzer70B:
         token_major_steps = []
         for step in prediction_steps:
             all_layers_data = step["all_layers_data"]
-            num_tokens = max(
-                len(layer_data[next(iter(layer_data))])
-                for layer_data in all_layers_data.values()
-                if layer_data
-            )
+
+            # find true max tokens across all components/layers
+            max_tokens = 0
+            for comps in all_layers_data.values():
+                for seq in comps.values():
+                    if isinstance(seq, list):
+                        max_tokens = max(max_tokens, len(seq))
+
             token_data = {}
-            components_to_include = ['attention_mechanism', 'mlp_output', 'block_output']
-            for token_idx in range(num_tokens):
+            for tok_idx in range(max_tokens):
                 per_layer = {}
                 for layer_idx, comps in all_layers_data.items():
                     layer_comps = {}
-                    for comp_name in components_to_include:
-                        if comp_name in comps and token_idx < len(comps[comp_name]):
-                            layer_comps[comp_name] = comps[comp_name][token_idx]
-                        else:
-                            layer_comps[comp_name] = []  # Empty list if no data
-                    if layer_comps:
+                    for comp_name, seq in comps.items():
+                        if seq and tok_idx < len(seq):         # <- only keep real data
+                            layer_comps[comp_name] = seq[tok_idx]
+                    if layer_comps:                             # <- skip empty layers
                         per_layer[str(layer_idx)] = layer_comps
-                token_data[str(token_idx)] = per_layer
+                if per_layer:                                   # <- skip empty tokens
+                    token_data[str(tok_idx)] = per_layer
 
             token_major_steps.append({
                 "step_idx": step["step_idx"],
@@ -85,10 +86,12 @@ class ActivationAnalyzer70B:
         components: List[str] = ["attention_mechanism", "mlp_output", "block_output"],
         max_layers: Optional[int] = None,
         max_tokens: int = 10,
-        log_scale: bool = False
+        log_scale: bool = False,
+        drop_empty: bool = True,   # <- new
     ):
         os.makedirs(output_dir, exist_ok=True)
         token_data = prediction_step["all_tokens_data"]
+
         for token_idx_str in list(token_data.keys())[:max_tokens]:
             token_idx = int(token_idx_str)
             layer_data = token_data[token_idx_str]
@@ -96,47 +99,53 @@ class ActivationAnalyzer70B:
             if max_layers:
                 layer_indices = layer_indices[:max_layers]
 
-            values = []
-            annotations = []
-            row_labels = []
+            rows, annots, row_labels = [], [], []
             max_k = 0
 
+            # build only rows that actually have data
             for layer_idx in layer_indices:
-                layer_str = str(layer_idx)
+                ld = layer_data[str(layer_idx)]
                 for comp in components:
-                    if comp in layer_data[layer_str] and layer_data[layer_str][comp]:
-                        topk_preds = layer_data[layer_str][comp]
-                        max_k = max(max_k, len(topk_preds))
-                        row_values = []
-                        row_annots = []
-                        for tok, prob in topk_preds:
+                    topk = ld.get(comp)
+                    if not topk:
+                        if drop_empty:
+                            continue            # <- skip empty component row entirely
+                        else:
+                            topk = []
+
+                    if topk:
+                        max_k = max(max_k, len(topk))
+                        r_vals, r_anns = [], []
+                        for tok, prob in topk:
                             val = np.log(prob + 1e-10) if log_scale else prob
-                            row_values.append(val)
+                            r_vals.append(val)
                             t = tok.encode('unicode_escape').decode()
-                            if len(t) > 12:
-                                t = t[:10] + "…"
-                            row_annots.append(f"{t}\n({prob:.1f})")
-                        values.append(row_values)
-                        annotations.append(row_annots)
-                        row_labels.append(f"Layer {layer_idx} - {comp}")
-                    else:
-                        values.append([0] * max_k)
-                        annotations.append([""] * max_k)
+                            if len(t) > 12: t = t[:10] + "…"
+                            r_anns.append(f"{t}\n({prob:.1f})")
+                        rows.append(r_vals)
+                        annots.append(r_anns)
                         row_labels.append(f"Layer {layer_idx} - {comp}")
 
-            if not values or max_k == 0:
+            if not rows or max_k == 0:
                 print(f"Skipping heatmap for token {token_idx}: No data available")
                 continue
 
-            for i in range(len(values)):
-                pad_len = max_k - len(values[i])
-                values[i].extend([0] * pad_len)
-                annotations[i].extend([""] * pad_len)
+            # pad to rectangular shape with NaNs (don’t affect color scale)
+            for i in range(len(rows)):
+                pad = max_k - len(rows[i])
+                if pad > 0:
+                    rows[i].extend([np.nan] * pad)
+                    annots[i].extend([""] * pad)
 
-            plt.figure(figsize=(max_k * 3, len(values) * 0.9 + 2))
+            plt.figure(figsize=(max_k * 3, len(rows) * 0.9 + 2))
+            data = np.array(rows, dtype=float)
+            mask = np.isnan(data)
+
+            # seaborn is fine here; NaNs will render as empty cells without extra rows
             sns.heatmap(
-                np.array(values),
-                annot=np.array(annotations),
+                data,
+                mask=mask,
+                annot=np.array(annots, dtype=object),
                 fmt="",
                 cmap="YlOrRd",
                 xticklabels=[f"Top-{i+1}" for i in range(max_k)],

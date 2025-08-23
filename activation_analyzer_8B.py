@@ -25,51 +25,51 @@ class PredictionStep(TypedDict):
 class ActivationAnalyzer8B:
     """A utility class for analyzing and filtering model activation values"""
     
-    @staticmethod
-    def filter_important_layers(
-        all_layers_data: Dict[int, Dict[str, List[Tuple[str, int]]]], 
-        threshold: int = 3
-    ) -> Dict[int, Dict[str, List[Tuple[str, int]]]]:
-        """
-        Filter out important layers containing high-probability tokens.
-        A layer is considered important if any of its components (attention_mechanism,
-        mlp_output, or block_output) contains tokens with probability above the threshold.
+    # @staticmethod
+    # def filter_important_layers(
+    #     all_layers_data: Dict[int, Dict[str, List[Tuple[str, int]]]], 
+    #     threshold: int = 3
+    # ) -> Dict[int, Dict[str, List[Tuple[str, int]]]]:
+    #     """
+    #     Filter out important layers containing high-probability tokens.
+    #     A layer is considered important if any of its components (attention_mechanism,
+    #     mlp_output, or block_output) contains tokens with probability above the threshold.
         
-        Args:
-            all_layers_data: Activation data for all layers
-                Format: {
-                    layer_idx: {
-                        component_name: [(token, probability), ...]
-                    }
-                }
-            threshold: Probability threshold (percentage)
+    #     Args:
+    #         all_layers_data: Activation data for all layers
+    #             Format: {
+    #                 layer_idx: {
+    #                     component_name: [(token, probability), ...]
+    #                 }
+    #             }
+    #         threshold: Probability threshold (percentage)
             
-        Returns:
-            Dict[int, Dict[str, List[Tuple[str, int]]]]: Filtered data of important layers
-        """
-        important_layers = {}
-        components_to_save = ['attention_mechanism', 'mlp_output', 'block_output']
+    #     Returns:
+    #         Dict[int, Dict[str, List[Tuple[str, int]]]]: Filtered data of important layers
+    #     """
+    #     important_layers = {}
+    #     components_to_save = ['attention_mechanism', 'mlp_output', 'block_output']
         
-        for layer_idx, layer_data in all_layers_data.items():
-            # 检查该层是否有任何目标组件的token概率超过阈值
-            is_important_layer = False
-            for component_name in components_to_save:
-                if component_name in layer_data:
-                    tokens_probs = layer_data[component_name]
-                    max_prob = max(prob for _, prob in tokens_probs)
-                    if max_prob > threshold:
-                        is_important_layer = True
-                        break
+    #     for layer_idx, layer_data in all_layers_data.items():
+    #         # 检查该层是否有任何目标组件的token概率超过阈值
+    #         is_important_layer = False
+    #         for component_name in components_to_save:
+    #             if component_name in layer_data:
+    #                 tokens_probs = layer_data[component_name]
+    #                 max_prob = max(prob for _, prob in tokens_probs)
+    #                 if max_prob > threshold:
+    #                     is_important_layer = True
+    #                     break
             
-            # 如果是重要层，保存所有目标组件的数据
-            if is_important_layer:
-                important_components = {}
-                for component_name in components_to_save:
-                    if component_name in layer_data:
-                        important_components[component_name] = layer_data[component_name]
-                important_layers[layer_idx] = important_components
+    #         # 如果是重要层，保存所有目标组件的数据
+    #         if is_important_layer:
+    #             important_components = {}
+    #             for component_name in components_to_save:
+    #                 if component_name in layer_data:
+    #                     important_components[component_name] = layer_data[component_name]
+    #             important_layers[layer_idx] = important_components
                 
-        return important_layers
+    #     return important_layers
     
     @staticmethod
     def get_top_predictions(
@@ -218,12 +218,12 @@ class ActivationAnalyzer8B:
             
             plot_data = np.array(plot_data)
             
-            # 计算图像高度
+         
             actual_fig_height = fig_height if fig_height is not None else max(8, len(plot_data) * 0.5)
             
             plt.figure(figsize=(fig_width, actual_fig_height))
             
-            # 绘制热力图，添加转义处理
+           
             ax = sns.heatmap(plot_data, 
                              cmap='YlOrRd',
                              annot=np.array(token_data),
@@ -232,11 +232,11 @@ class ActivationAnalyzer8B:
                              yticklabels=row_labels,
                              annot_kws={'size': 8})
             
-            # 添加层之间的水平分割线
+            
             for boundary in layer_boundaries[:-1]:
                 ax.axhline(y=boundary, color='black', linewidth=1)
             
-            # 设置标题和标签，确保特殊字符被正确转义
+           
             title = f"{title_prefix}\nModel: {model_name}\n"
             if "Important" in title_prefix:
                 title += f"Layer Threshold: {threshold}%\n"
@@ -245,7 +245,7 @@ class ActivationAnalyzer8B:
             plt.title(title)
             plt.xlabel("Token Rank (by probability)")
             
-            # 添加输入提示和预测token的说明，确保特殊字符被正确转义
+            
             input_text = prediction_step['input_text'].encode('unicode_escape').decode()
             predicted_token = prediction_step['predicted_token'].encode('unicode_escape').decode()
             plt.figtext(0.05, -0.1, 
@@ -257,7 +257,7 @@ class ActivationAnalyzer8B:
             
             plt.tight_layout()
             
-            # 保存图像
+            
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             plt.savefig(save_path, bbox_inches='tight', dpi=300)
             plt.close()
@@ -267,12 +267,12 @@ class ActivationAnalyzer8B:
         components_to_plot = ['attention_mechanism', 'mlp_output', 'block_output']
         
         # Create heatmap for Important Layers
-        important_data = create_plot_data(prediction_step['important_layers'])
-        create_heatmap(
-            *important_data,
-            title_prefix="Important Layers",
-            save_path=os.path.join(output_dir, f"important_layers_step_{step_idx}.png")
-        )
+        # important_data = create_plot_data(prediction_step['important_layers'])
+        # create_heatmap(
+        #     *important_data,
+        #     title_prefix="Important Layers",
+        #     save_path=os.path.join(output_dir, f"important_layers_step_{step_idx}.png")
+        # )
         
         # Create heatmap for All Layers
         all_data = create_plot_data(prediction_step['all_layers_data'])
