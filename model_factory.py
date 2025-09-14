@@ -54,6 +54,7 @@ class ModelFactory:
                 collect_attn_mech=collect_attn_mech,
                 collect_mlp=collect_mlp,
                 collect_block=collect_block,
+                selected_layers = selected_layers,
                 **kwargs
             )
 

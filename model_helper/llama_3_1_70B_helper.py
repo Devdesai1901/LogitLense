@@ -123,7 +123,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Helper class to load and manage LLaMA 3.1–70B model with DeepSpeed and logit lens
 class Llama3_1_70BHelper:
-    def __init__(self, cfg, collect_attn_mech=True, collect_mlp=True, collect_block=True, selected_layers: List[int] = [10,15,25,35,79]):
+    def __init__(self, cfg, collect_attn_mech=True, collect_mlp=True, collect_block=True, selected_layers: List[int] = None):
         print("Initializing Llama-3.1-70B Helper...")
         see_memory_usage("Before initialization", force=True)
         
@@ -180,7 +180,6 @@ class Llama3_1_70BHelper:
             new_layers = []
             for i, layer in enumerate(base_model.layers):
                 if i in self.selected_layers:
-                    print("using BlockOut put wrappering ")
                     new_layers.append(
                         BlockOutputWrapper(
                             layer, self.lm_head, self.norm,
@@ -251,7 +250,7 @@ class Llama3_1_70BHelper:
         values, indices = torch.topk(softmaxed, topk)
         probs_percent = [int(v * 100) for v in values.tolist()]
         tokens = self.tokenizer.batch_decode(indices.unsqueeze(-1))
-        print(label, list(zip(tokens, probs_percent)))
+        # print(label, list(zip(tokens, probs_percent)))
 
 
 

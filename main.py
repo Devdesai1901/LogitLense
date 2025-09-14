@@ -17,9 +17,6 @@ def parse_args():
     ap.add_argument("--max_new_tokens", type=int, default=15)
     ap.add_argument("--extract_topk", type=int, default=15)
     ap.add_argument("--local_rank", type=int, default=0, help=argparse.SUPPRESS)
-
-    # 70B config (YAML)
-    ap.add_argument("--config", help="Path to YAML config for 70B")
     ap.add_argument("--layers",type=str,default=None,metavar="LIST",help=(
         "Layers to analyze (CSV/ranges). Examples: '0-4', '0,5,10-12', '3,-1', '5-'. "
         "Negative indices count from the end (-1 = last). "
@@ -27,6 +24,9 @@ def parse_args():
         "Default: first 5 layers."
     ),
 )
+    # 70B config (YAML)
+    ap.add_argument("--config", help="Path to YAML config for 70B")
+   
 
 
     # 8B-only args (kept for backward compatibility)
@@ -150,55 +150,34 @@ def run_analysis(
         heatmap_duration = 0.0
         json_dump_duration = 0.0
 
-        if model_type == ModelType.LLAMA_3_1_70B:
-            # --- convert_to_token_major (timed) ---
-            t_conv_start = time()
-            token_major_steps = analyzer.convert_to_token_major(prediction_steps)
-            t_conv_end = time()
-            convert_duration = t_conv_end - t_conv_start
+       
+        # --- convert_to_token_major (timed) ---
+        t_conv_start = time()
+        token_major_steps = analyzer.convert_to_token_major(prediction_steps)
+        t_conv_end = time()
+        convert_duration = t_conv_end - t_conv_start
 
-            # --- visualize heatmaps (timed; total) ---
-            t_viz_start = time()
-            for step in token_major_steps:
-                analyzer.visualize_per_token_combined_heatmap(
-                    prediction_step=step,
-                    output_dir=f"{trial_path}/visualizations/per_token",
-                    step_idx=step["step_idx"],
-                    components=["attention_mechanism", "mlp_output", "block_output"],
-                    max_tokens=max_new_tokens,
-                    log_scale=False,
-                )
-            t_viz_end = time()
-            heatmap_duration = t_viz_end - t_viz_start
+        # --- visualize heatmaps (timed; total) ---
+        t_viz_start = time()
+        for step in token_major_steps:
+            analyzer.visualize_per_token_combined_heatmap(
+                prediction_step=step,
+                output_dir=f"{trial_path}/visualizations/per_token",
+                step_idx=step["step_idx"],
+                components=["attention_mechanism", "mlp_output", "block_output"],
+                max_tokens=max_new_tokens,
+                log_scale=False,
+            )
+        t_viz_end = time()
+        heatmap_duration = t_viz_end - t_viz_start
 
-            # --- save JSON dump (timed) ---
-            t_dump_start = time()
-            analyzer.save_prediction_steps(token_major_steps, trial_path, save_all_data=True)
-            t_dump_end = time()
-            json_dump_duration = t_dump_end - t_dump_start
+        # --- save JSON dump (timed) ---
+        t_dump_start = time()
+        analyzer.save_prediction_steps(token_major_steps, trial_path, save_all_data=True)
+        t_dump_end = time()
+        json_dump_duration = t_dump_end - t_dump_start
 
-        else:
-            # --- visualize_layer_predictions (timed; total) ---
-            t_viz_start = time()
-            # for step in prediction_steps:
-            #     analyzer.visualize_layer_predictions(
-            #         prediction_step=step,
-            #         output_dir=f"{trial_path}/visualizations",
-            #         step_idx=step["step_idx"],
-            #         model_name=model_type.value,
-            #         threshold=3,
-            #         max_tokens=max_new_tokens,
-            #         log_scale=False,
-            #     )
-            t_viz_end = time()
-            heatmap_duration = t_viz_end - t_viz_start
-
-            # --- save JSON dump (timed) ---
-            t_dump_start = time()
-            # analyzer.save_prediction_steps(prediction_steps, trial_path, save_all_data=True)
-            t_dump_end = time()
-            json_dump_duration = t_dump_end - t_dump_start
-
+        
         t_trial_end = time()
         t_trial_end_iso = _iso_now()
         trial_total = t_trial_end - t_trial_start
@@ -230,7 +209,10 @@ def run_analysis(
 def main():
     args = parse_args()
     mt = ModelType.from_string(args.model)
-    total_layers = 80
+    if ModelType.LLAMA_3_1_70B:
+        total_layers = 80
+    else:
+         total_layers = 32    
     selected_layers = parse_layer_spec(args.layers, total_layers, default_k=5)
     print(f"[Layer Select] Analyzing layers: {selected_layers}")
 
@@ -257,8 +239,9 @@ def main():
             collect_attn_mech=args.collect_attn_mech,
             collect_mlp=args.collect_mlp,
             collect_block=args.collect_block,
+            selected_layers = selected_layers
         )
-        analyzer = ActivationAnalyzer8B()
+        analyzer = ActivationAnalyzer70B()
 
     # --- total run timing ---
     total_start_ts = time()
