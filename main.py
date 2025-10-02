@@ -5,7 +5,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from model_factory import ModelFactory, ModelType
 from activation_analyzer import ActivationAnalyzer70B
-from activation_analyzer_8B import ActivationAnalyzer8B
+# from activation_analyzer_8B import ActivationAnalyzer8B
 from model_helper.config import load_config
 from time import time
 
