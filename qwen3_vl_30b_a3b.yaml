@@ -1,0 +1,17 @@
+# qwen3_vl_30b_a3b.yaml
+
+# Model source
+model_id: Qwen/Qwen3-VL-30B-A3B-Instruct   # or Qwen/Qwen3-VL-30B-A3B
+cache_dir:  ""                               #/home/$USER/.cache/huggingface
+
+# Auth (optional)
+hf_token_env: HUGGINGFACE_TOKEN
+hf_token: "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"                               # leave empty if using env var
+
+# Runtime
+dtype: bfloat16
+tensor_parallel_size: auto                 # "auto" -> torch.cuda.device_count()
+trust_remote_code: true                    # required for Qwen3-VL implementations
+
+# Tokenizer / padding notes
+pad_left: true                             # you can keep this for your steering scripts
