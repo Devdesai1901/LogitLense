@@ -211,8 +211,8 @@ def main():
     mt = ModelType.from_string(args.model)
     if  mt == ModelType.LLAMA_3_1_70B:
         total_layers = 80
-    elif mt == ModelType.QWEN3_VL_30B_A3B:
-        total_layers = 48          
+    elif mt == ModelType.QWEN_3_32B:
+        total_layers = 64         
     else:
         total_layers = 32    
 
@@ -235,7 +235,7 @@ def main():
             selected_layers = selected_layers
         )
         analyzer = ActivationAnalyzer70B()
-    elif mt == ModelType.QWEN3_VL_30B_A3B:
+    elif mt == ModelType.QWEN_3_32B:
         if not args.config:
             raise SystemExit("Error: --config is required for Qwen3-VL-30B-A3B (YAML).")
         cfg = load_config(args.config)

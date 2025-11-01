@@ -26,21 +26,31 @@ class MLPWrapper(torch.nn.Module):
     def reset(self): self.activations=None
 
 class BlockOutputWrapper(torch.nn.Module):
-    def __init__(self, block, lm_head, norm, collect_attn_mech=True, collect_mlp=True, collect_block=True):
+    def __init__(self, block, lm_head, norm,
+                 collect_attn_mech=True, collect_mlp=True, collect_block=True):
         super().__init__()
-        self.block = block; self.lm_head = lm_head; self.norm = norm
-        self.collect_attn_mech = collect_attn_mech; self.collect_mlp = collect_mlp; self.collect_block = collect_block
+        # core refs
+        self.block = block
+        self.lm_head = lm_head
+        self.norm = norm
 
-        # Qwen blocks usually expose .self_attn and .mlp on the text backbone
-        attn = getattr(self.block, "self_attn", None) or getattr(self.block, "attention", None)
-        ff   = getattr(self.block, "mlp", None)       or getattr(self.block, "ffn", None)
-        if attn is None or ff is None:
-            raise RuntimeError("Qwen block missing expected submodules (self_attn/mlp).")
-        self.block.self_attn = AttnWrapper(attn)
-        self.block.mlp = MLPWrapper(ff)
+        self.collect_attn_mech = collect_attn_mech
+        self.collect_mlp = collect_mlp
+        self.collect_block = collect_block
 
-        self.post_attention_layernorm = getattr(self.block, "post_attention_layernorm", None)
+        # ---- expose ONLY the minimal attrs HF reads on the layer itself ----
+        # REQUIRED for Qwen3 modeling loop:
+        self.attention_type = getattr(block, "attention_type", None)
+        # Optional, but nice-to-have to match the layer interface:
+        self.config = getattr(block, "config", None)
+        self.layer_idx = getattr(block, "layer_idx", None)
 
+        # ---- wrap submodules for capture ----
+        self.block.self_attn = AttnWrapper(self.block.self_attn)
+        self.block.mlp = MLPWrapper(self.block.mlp)
+        self.post_attention_layernorm = self.block.post_attention_layernorm
+
+        # collectors
         self.attn_mech_output_unembedded = []
         self.mlp_output_unembedded = []
         self.block_output_unembedded = []
@@ -56,14 +66,22 @@ class BlockOutputWrapper(torch.nn.Module):
             self.block_output_unembedded.append(hidden[:, -1:, :])
         return out
 
-    def attn_add_tensor(self, t): self.block.self_attn.add_tensor = t
+    def attn_add_tensor(self, t):
+        self.block.self_attn.add_tensor = t
+
     def reset(self):
-        self.block.self_attn.reset(); self.block.mlp.reset()
-        self.attn_mech_output_unembedded=[]; self.mlp_output_unembedded=[]; self.block_output_unembedded=[]
-    def get_attn_activations(self): return self.block.self_attn.activations
+        self.block.self_attn.reset()
+        self.block.mlp.reset()
+        self.attn_mech_output_unembedded = []
+        self.mlp_output_unembedded = []
+        self.block_output_unembedded = []
+
+    def get_attn_activations(self):
+        return self.block.self_attn.activations
+
 
 # ---- Helper ----
-class Qwen3_VL_30B_A3B_Helper:
+class Qwen_3_32B_Helper:
     def __init__(self, cfg, collect_attn_mech=True, collect_mlp=True, collect_block=True, selected_layers: List[int] = None):
         print("Initializing Qwen3-VL-30B-A3B Helper...")
         see_memory_usage("Before init", force=True)

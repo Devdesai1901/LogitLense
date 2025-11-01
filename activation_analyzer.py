@@ -3,6 +3,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import os
+import matplotlib
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+matplotlib.rcParams['axes.unicode_minus'] = False
+
+def _pretty_token(tok: str) -> str:
+    # normalize common subword markers
+    if tok.startswith("▁") or tok.startswith("Ġ"):
+        tok = " " + tok[1:]
+    return tok.replace("\n", "\\n").replace("\t", "\\t")
 
 class ComponentData(TypedDict):
     attention_mechanism: List[Tuple[str, int]]
@@ -119,7 +128,7 @@ class ActivationAnalyzer70B:
                         for tok, prob in topk:
                             val = np.log(prob + 1e-10) if log_scale else prob
                             r_vals.append(val)
-                            t = tok.encode('unicode_escape').decode()
+                            t = _pretty_token(tok)
                             if len(t) > 12: t = t[:10] + "…"
                             r_anns.append(f"{t}\n({prob:.1f})")
                         rows.append(r_vals)
