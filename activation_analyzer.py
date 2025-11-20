@@ -4,8 +4,7 @@ import seaborn as sns
 import numpy as np
 import os
 import matplotlib
-matplotlib.rcParams['font.family'] = 'DejaVu Sans'
-matplotlib.rcParams['axes.unicode_minus'] = False
+
 
 def _pretty_token(tok: str) -> str:
     # normalize common subword markers

@@ -212,7 +212,11 @@ def main():
     if  mt == ModelType.LLAMA_3_1_70B:
         total_layers = 80
     elif mt == ModelType.QWEN_3_32B:
-        total_layers = 64         
+        total_layers = 64   
+    elif mt == ModelType.QWEN_3_4B:
+        total_layers = 32  
+    elif mt == ModelType.QWEN_3_14B:
+        total_layers = 40              
     else:
         total_layers = 32    
 
@@ -222,7 +226,7 @@ def main():
 
 
     # Construct model per-arch
-    if mt == ModelType.LLAMA_3_1_70B:
+    if mt == ModelType.LLAMA_3_1_70B or ModelType.QWEN_3_32B or ModelType.QWEN_3_4B:
         if not args.config:
             raise SystemExit("Error: --config is required for 70B (YAML).")
         cfg = load_config(args.config)
@@ -235,19 +239,6 @@ def main():
             selected_layers = selected_layers
         )
         analyzer = ActivationAnalyzer70B()
-    elif mt == ModelType.QWEN_3_32B:
-        if not args.config:
-            raise SystemExit("Error: --config is required for Qwen3-VL-30B-A3B (YAML).")
-        cfg = load_config(args.config)
-        model = ModelFactory.create_model(
-            model_type=mt,
-            cfg=cfg,
-            collect_attn_mech=args.collect_attn_mech,
-            collect_mlp=args.collect_mlp,
-            collect_block=args.collect_block,
-            selected_layers=selected_layers
-        )
-        analyzer = ActivationAnalyzer70B()     
     else:
         # 8B unchanged signature
         model = ModelFactory.create_model(

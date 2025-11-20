@@ -1,4 +1,4 @@
-
+# model_helper/qwen3_14b_helper.py
 import os, gc, torch, deepspeed, numpy as np
 from typing import List, Tuple, Dict
 from deepspeed.runtime.utils import see_memory_usage
@@ -11,7 +11,8 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # ---- Reuse your wrappers with light generalization ----
 class AttnWrapper(torch.nn.Module):
-    def __init__(self, attn): super().__init__(); self.attn = attn; self.activations=None; self.add_tensor=None
+    def __init__(self, attn): 
+        super().__init__(); self.attn = attn; self.activations=None; self.add_tensor=None
     def forward(self, *args, **kwargs):
         out = self.attn(*args, **kwargs)
         h = out[0] if isinstance(out, tuple) else out
@@ -21,8 +22,10 @@ class AttnWrapper(torch.nn.Module):
     def reset(self): self.activations=None; self.add_tensor=None
 
 class MLPWrapper(torch.nn.Module):
-    def __init__(self, mlp): super().__init__(); self.mlp=mlp; self.activations=None
-    def forward(self, *a, **k): y = self.mlp(*a, **k); self.activations = y; return y
+    def __init__(self, mlp): 
+        super().__init__(); self.mlp=mlp; self.activations=None
+    def forward(self, *a, **k): 
+        y = self.mlp(*a, **k); self.activations = y; return y
     def reset(self): self.activations=None
 
 class BlockOutputWrapper(torch.nn.Module):
@@ -38,17 +41,15 @@ class BlockOutputWrapper(torch.nn.Module):
         self.collect_mlp = collect_mlp
         self.collect_block = collect_block
 
-        # ---- expose ONLY the minimal attrs HF reads on the layer itself ----
-        # REQUIRED for Qwen3 modeling loop:
+        # minimal attrs HF may read
         self.attention_type = getattr(block, "attention_type", None)
-        # Optional, but nice-to-have to match the layer interface:
         self.config = getattr(block, "config", None)
         self.layer_idx = getattr(block, "layer_idx", None)
 
-        # ---- wrap submodules for capture ----
+        # wrap submodules for capture
         self.block.self_attn = AttnWrapper(self.block.self_attn)
         self.block.mlp = MLPWrapper(self.block.mlp)
-        self.post_attention_layernorm = self.block.post_attention_layernorm
+        self.post_attention_layernorm = getattr(self.block, "post_attention_layernorm", None)
 
         # collectors
         self.attn_mech_output_unembedded = []
@@ -66,8 +67,7 @@ class BlockOutputWrapper(torch.nn.Module):
             self.block_output_unembedded.append(hidden[:, -1:, :])
         return out
 
-    def attn_add_tensor(self, t):
-        self.block.self_attn.add_tensor = t
+    def attn_add_tensor(self, t): self.block.self_attn.add_tensor = t
 
     def reset(self):
         self.block.self_attn.reset()
@@ -80,10 +80,15 @@ class BlockOutputWrapper(torch.nn.Module):
         return self.block.self_attn.activations
 
 
-# ---- Helper ----
-class Qwen_3_32B_Helper:
+# ---- Helper (14B dense text-only) ----
+class Qwen_3_14B_Helper:
+    """
+    Works with dense text-only 14B variants, e.g.:
+      - Qwen/Qwen3-14B-Instruct
+      - Qwen/Qwen2-14B-Instruct
+    """
     def __init__(self, cfg, collect_attn_mech=True, collect_mlp=True, collect_block=True, selected_layers: List[int] = None):
-        print("Initializing Qwen3-VL-30B-A3B Helper...")
+        print("Initializing Qwen 14B (dense) Helper...")
         see_memory_usage("Before init", force=True)
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         world_size = torch.cuda.device_count()
@@ -93,8 +98,7 @@ class Qwen_3_32B_Helper:
         if not torch.distributed.is_initialized():
             deepspeed.init_distributed(dist_backend="nccl")
 
-        self.tokenizer, base_model, source = load_tokenizer_and_model(cfg)
-        # print(f"[ModelLoader] Loaded from: {source}")
+        self.tokenizer, base_model, _source = load_tokenizer_and_model(cfg)
         self.selected_layers = set(selected_layers or [])
 
         tp = (world_size if str(cfg.get("tensor_parallel_size", "auto")).lower()=="auto"
@@ -108,22 +112,25 @@ class Qwen_3_32B_Helper:
         )
         see_memory_usage("After DS init", force=True)
 
-        # ---- Find the TEXT backbone and its layers (duck-typed) ----
+        # ---- Locate the TEXT backbone and layers ----
         full = self.model.module if hasattr(self.model, "module") else self.model
-        # Qwen3-VL stacks typically: full.model.(text_model|language_model).layers
+        # Dense text-only Qwen typically exposes `full.model.layers` (+ optional aliases)
         candidates = [
-            getattr(getattr(full, "model", full), "text_model", None),
-            getattr(getattr(full, "model", full), "language_model", None),
+            getattr(getattr(full, "model", full), "text_model", None),     # if present
+            getattr(getattr(full, "model", full), "language_model", None),# if present
             getattr(full, "model", None),
             getattr(full, "language_model", None),
         ]
         text = next((c for c in candidates if c is not None and hasattr(c, "layers")), None)
         if text is None:
-            raise RuntimeError("Could not locate Qwen text backbone with a .layers ModuleList.")
+            raise RuntimeError("Could not locate Qwen 14B text backbone with a .layers ModuleList.")
+
         self.lm_head = getattr(full, "lm_head", None) or getattr(full, "language_model_head", None)
         self.norm = getattr(text, "norm", None) or getattr(getattr(full, "model", full), "norm", None)
+        if self.lm_head is None or self.norm is None:
+            raise RuntimeError("Expected lm_head and norm on Qwen 14B dense model.")
 
-        # Wrap only selected layers
+        # ---- Wrap only selected layers ----
         new_layers = []
         for i, layer in enumerate(text.layers):
             if i in self.selected_layers:
@@ -138,7 +145,7 @@ class Qwen_3_32B_Helper:
             else:
                 new_layers.append(layer)
         text.layers = torch.nn.ModuleList(new_layers)
-        print("Qwen text layers wrapped.")
+        print("Qwen 14B text layers wrapped.")
 
         torch.cuda.empty_cache(); gc.collect()
 
@@ -151,7 +158,7 @@ class Qwen_3_32B_Helper:
             except Exception as e:
                 print(f"Cleanup error: {e}")
 
-    # ---- Decoding (identical to your 70B vectorized path) ----
+    # ---- Decoding (same as your 32B path) ----
     def collect_decoded_activations(self, H: torch.Tensor, topk: int = 3):
         with torch.inference_mode():
             if H.dim()==2: H = H.unsqueeze(0)
@@ -163,16 +170,18 @@ class Qwen_3_32B_Helper:
             probs = torch.softmax(topk_vals, dim=-1)
             topk_idx_cpu = topk_idx.squeeze(0).cpu()
             probs_cpu = (probs.squeeze(0)*100).to(torch.int16).cpu()
-            T,K = topk_idx_cpu.shape
-            flat_ids = topk_idx_cpu.reshape(-1,1).tolist()
+            T, K = topk_idx_cpu.shape
+            flat_ids = topk_idx_cpu.reshape(-1, 1).tolist()
             decoded = self.tokenizer.batch_decode(flat_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-            decoded = np.array(decoded, dtype=object).reshape(T,K).tolist()
+            decoded = np.array(decoded, dtype=object).reshape(T, K).tolist()
             probs_ll = probs_cpu.tolist()
             return [list(zip(tok_row, prob_row)) for tok_row, prob_row in zip(decoded, probs_ll)]
 
     def reset_all(self):
         full = self.model.module if hasattr(self.model, "module") else self.model
-        text = getattr(getattr(full, "model", full), "text_model", None) or getattr(full, "model", None)
+        text = (getattr(getattr(full, "model", full), "text_model", None) or
+                getattr(getattr(full, "model", full), "language_model", None) or
+                getattr(full, "model", None))
         if not text or not self.selected_layers: return
         for i in self.selected_layers:
             blk = text.layers[i]
@@ -193,9 +202,11 @@ class Qwen_3_32B_Helper:
         selected_layers: List[int] = None
     ) -> List[PredictionStep]:
         sel = sorted(self.selected_layers) if self.selected_layers else sorted(set(selected_layers or []))
+
         tok = self.tokenizer(prompt, return_tensors="pt", truncation=True)
         input_ids = tok.input_ids.to(self.device)
         attn_mask = tok.attention_mask.to(self.device)
+
         with torch.no_grad():
             gen_ids = self.model.generate(
                 input_ids=input_ids,
@@ -211,18 +222,20 @@ class Qwen_3_32B_Helper:
 
         # collect per-layer unembedded streams
         full = self.model.module if hasattr(self.model, "module") else self.model
-        text = getattr(getattr(full, "model", full), "text_model", None) or getattr(full, "model", None)
+        text = (getattr(getattr(full, "model", full), "text_model", None) or
+                getattr(getattr(full, "model", full), "language_model", None) or
+                getattr(full, "model", None))
         all_layers_data: Dict[int, Dict[str, List[Tuple[str,int]]]] = {}
         for i in sel:
             L = text.layers[i]
             layer_data = {}
-            if collect_attn_mech and L.attn_mech_output_unembedded:
+            if collect_attn_mech and getattr(L, "attn_mech_output_unembedded", None):
                 A = torch.cat(L.attn_mech_output_unembedded, dim=1)
                 layer_data["attention_mechanism"] = self.collect_decoded_activations(A, topk=topk)
-            if collect_mlp and L.mlp_output_unembedded:
+            if collect_mlp and getattr(L, "mlp_output_unembedded", None):
                 M = torch.cat(L.mlp_output_unembedded, dim=1)
                 layer_data["mlp_output"] = self.collect_decoded_activations(M, topk=topk)
-            if collect_block and L.block_output_unembedded:
+            if collect_block and getattr(L, "block_output_unembedded", None):
                 B = torch.cat(L.block_output_unembedded, dim=1)
                 layer_data["block_output"] = self.collect_decoded_activations(B, topk=topk)
             all_layers_data[i] = layer_data
