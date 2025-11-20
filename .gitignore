@@ -7,7 +7,7 @@ __pycache__/
 *.so
 
 #yaml files
-*.yaml
+.yaml
 
 # Distribution / packaging
 .Python

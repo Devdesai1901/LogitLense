@@ -4,7 +4,7 @@ cache_dir: /home/$USER/.cache/huggingface         # where to cache downloads (an
 
 # Auth (optional)
 hf_token_env: HUGGINGFACE_TOKEN                   # env var holding token; or leave blank
-hf_token: "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" # or put the token directly (not recommended)
+hf_token:  # or put the token directly (not recommended)
 
 # Runtime
 dtype: bfloat16
