@@ -15,7 +15,7 @@ Currently supports:
 - **Qwen3-32B** ✅
 - **Qwen3-4B** ✅
 - **Qwen3-14B** ✅
- Designed to extend easily to other models.
+- Designed to extend easily to other models.
 
 ---
 
@@ -34,31 +34,36 @@ Currently supports:
 ## 📂 Project Structure
 
 ```
-.
-├── explanation/ # Stores activation analysis outputs (JSON, heatmaps), runtime duration for model runs
+LOGITLENSE/
 │
-├── model_helper/
-│   ├── llama_3_1_70B_helper.py              # Helper functions & wrappers for running LLaMA 3.1–70B for Logit Lense 
-│   ├── llama_3_1_helper.py                  # Helper functions & wrappers for running LLaMA 3.1–8B for Logit Lense 
-│   └── model_io.py                          # Model weight loading & checkpoint management (I/O abstraction)
-│                          
+├── assets/                             
 │
-├── steering_vector/
-│   ├── evaluate_steerability_custom.py     # Script to test steerability & measure vector influence 
-│   │                                       # (For Research purpose: calculate steerability score & propensity curve)
-|   |
-│   ├── llm_new_steer.py                     # module for steering vector injection for LLaMA 3.1–70B
-│   ├── steer_vec_llama_3_1_8b.py            # module for steering vector injection for LLaMA 3.1–8B
-│   
+├── model_helper/                       # Model-specific helper implementations for logit lense 
+│   ├── config.py                       # Model configuration settings
+│   ├── model_io.py                     # Model loading / saving utilities
+│   ├── llama_3_1_helper.py             # LLaMA 3.1 base helper
+│   ├── llama_3_1_70B_helper.py         # LLaMA 3.1 70B helper
+│   ├── qwen_3_4B_helper.py             # Qwen 3 4B helper
+│   ├── qwen_3_14B_helper.py            # Qwen 3 14B helper
+│   └── qwen_3_32B_helper.py            # Qwen 3 32B helper
 │
-├── activation_analyzer.py                   # Helper  File to genereate Heatmaps and JSON files output
+├── steering_vector/                    # Steering vector + controllability modules
+│   ├── __init__.py
+│   ├── evaluate_steerability_custom.py # Custom steering evaluation metrics
+│   ├── llm_new_steer.py                # Core steering logic
+│   └── steer_vec_llama_3_1_8b.py       #  steering implementation for LLaMA, Qwen
+│                             
 │
-├── config.yaml                              # YAML configuration for layer selection, capture flags, output paths
-├── main.py                                  # Entry point for running logit-lens analysis (parsing args + launching pipeline)
+├── activation_analyzer.py              # Logit lens & activation analysis pipeline
+├── model_factory.py                    # Model selection (factory pattern)
+├── main.py                             # Entry point script
 │
-├── model_factory.py                          # Factory for building models (8B/70B) with optional wrappers & probing
-├── requirements.txt                          # Python dependencies 
-
+├── llama3.1_70B.yaml                   # LLaMA 3.1 70B configuration
+├── qwen3_32B.yaml                      # Qwen 3 32B configuration
+│
+├── requirements.txt                    
+├── .gitignore                     
+└── README.md                           
 
 ```
 
