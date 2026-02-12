@@ -12,7 +12,10 @@ It also supports **hidden state steering**, letting you intentionally nudge mode
 Currently supports:
 - **Meta-LLaMA-3.1-70B** ✅ 
 - **Meta-LLaMA-3.1-8B** ✅
-- Designed to extend easily to other models.
+- **Qwen3-32B** ✅
+- **Qwen3-4B** ✅
+- **Qwen3-14B** ✅
+ Designed to extend easily to other models.
 
 ---
 
@@ -20,7 +23,7 @@ Currently supports:
 
 - **Layer-wise Analysis (Logit Lens)** – Analyze model hidden states & predictions layer-by-layer.
 - **Steering Vectors** – Inject targeted changes into hidden states to influence outputs.
-- **Multi-Model Support** – Tested with Meta-LLaMA-3.1-70B and 8B.
+- **Multi-Model Support** – Tested with Meta-LLaMA-3.1-70B, 8B and Qwen3 32B, 14B, 4B.
 - **Visualization Outputs** – Generates heatmaps for each token at each layer.
 - **Local Model Support** – Load models locally to reduce network dependency.
 - **Distributed Inference with Model Parallelism** – Achieved via **DeepSpeed** + **PyTorch** + **Transformers**.
@@ -79,7 +82,7 @@ cd LogitLense
 pip install -r requirements.txt
 ```
 
-## 🔧 Prerequisite (Required): Configure `config.yaml` for **LLaMA-3.1-70B**
+## 🔧 Prerequisite (Required): Configure `config.yaml`**
 
 Configure a `config.yaml` at the repo root before running 70B. This file controls model source, auth, and runtime.
 
@@ -87,7 +90,7 @@ Configure a `config.yaml` at the repo root before running 70B. This file control
 ## 🏃 Running the Code
 
 
-### **Logit Lens for LLaMA 3.1–70B **
+### Logit Lens for LLaMA 3.1–70B 
 ```bash
 deepspeed --num_gpus=4 main.py \
   --model llama_3_1_70B \
@@ -103,7 +106,7 @@ deepspeed --num_gpus=4 main.py \
 
 ```
 
-### **Logit Lens for LLaMA 3.1–8B **
+<!-- ### **Logit Lens for LLaMA 3.1–8B **
 ```bash
 deepspeed --num_gpus=4 main.py \
   --model llama_3_1_8b \
@@ -116,7 +119,7 @@ deepspeed --num_gpus=4 main.py \
   --collect_mlp \
   --collect_attn_mech \
   --layers 0-31
-```
+``` -->
 
 ### **Steering Vector**
 ```bash
