@@ -3,7 +3,7 @@
 
 # LLM-Insight 
 
-**LLM‑Insight** is an interpretability toolkit that reveals what’s happening inside large language models. Using **Logit Lens** and **Steering Vectors**, it performs **layer‑wise analysis** of hidden states, visualizes how token predictions evolve, and outputs insights through heatmaps and JSON files.
+**LLM‑Insight** is a toolkit for distributed interpretability and control of LLMs. Using **Logit Lens** and **Steering Vectors**, it performs **layer‑wise analysis** of hidden states, visualizes how token predictions evolve, and outputs insights through heatmaps and JSON files.
 
 It also supports **hidden state steering**, letting you intentionally nudge model behavior to test ideas, reduce biases, or guide responses. This makes LLM‑Insight both a **diagnostic** and an **active** tool for improving the **explainability and transparency** of modern LLMs.
 
@@ -27,7 +27,6 @@ Currently supports:
 - **Visualization Outputs** – Generates heatmaps for each token at each layer.
 - **Local Model Support** – Load models locally to reduce network dependency.
 - **Distributed Inference with Model Parallelism** – Achieved via **DeepSpeed** + **PyTorch** + **Transformers**.
-- Optimized for **4× NVIDIA RTX A6000 (48GB)** GPUs with **250GB CPU RAM**.
 
 ---
 
